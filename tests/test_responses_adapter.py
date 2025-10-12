@@ -28,8 +28,10 @@ class FakeResponse:
 
 def test_model_is_reasoning_matches_prefix_and_aliases():
     assert model_is_reasoning("gpt-5.5-preview")
-    assert model_is_reasoning("gpt-5-thinking")
-    assert model_is_reasoning("O3")
+    assert model_is_reasoning("gpt-4.1")
+    assert model_is_reasoning("o3-mini")
+    assert model_is_reasoning("custom-thinking-prototype")
+    assert model_is_reasoning("o4-mini")
     assert not model_is_reasoning("gpt-4o")
 
 
@@ -93,3 +95,45 @@ def test_responses_to_chat_like_with_tool_call():
     assert arguments["domain"] == "rest_command"
     assert normalized["choices"][0]["finish_reason"] == "tool_calls"
     assert normalized["choices"][0]["message"]["content"] == ""
+
+
+def test_responses_to_chat_like_with_multiple_tool_calls():
+    payload = {
+        "id": "resp_multi",
+        "object": "response",
+        "created": 3,
+        "model": "o3-mini",
+        "output": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_call",
+                        "tool_call": {
+                            "id": "call_1",
+                            "name": "turn_on_light",
+                            "arguments": {"entity_id": "light.kitchen"},
+                        },
+                    },
+                    {
+                        "type": "tool_call",
+                        "tool_call": {
+                            "id": "call_2",
+                            "name": "turn_on_light",
+                            "arguments": {"entity_id": "light.patio"},
+                        },
+                    },
+                ],
+            }
+        ],
+        "usage": {"prompt_tokens": 15, "completion_tokens": 10, "total_tokens": 25},
+    }
+
+    normalized = responses_to_chat_like(FakeResponse(payload))
+
+    tool_calls = normalized["choices"][0]["message"]["tool_calls"]
+    assert len(tool_calls) == 2
+    first_args = json.loads(tool_calls[0]["function"]["arguments"])
+    second_args = json.loads(tool_calls[1]["function"]["arguments"])
+    assert first_args["entity_id"] == "light.kitchen"
+    assert second_args["entity_id"] == "light.patio"
