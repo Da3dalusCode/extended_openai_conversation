@@ -31,6 +31,9 @@
                     "functions": "Functions",
                     "attach_username": "Attach Username to Message",
                     "use_tools": "Use Tools",
+                    "use_responses_api": "Use Responses API",
+                    "reasoning_effort": "Reasoning effort",
+                    "max_completion_tokens": "Max completion tokens",
                     "context_threshold": "Context Threshold",
                     "context_truncate_strategy": "Context truncation strategy when exceeded threshold"
                 }

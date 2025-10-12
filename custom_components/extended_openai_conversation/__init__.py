@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
+from copy import deepcopy
 from typing import Literal
 
 from openai import AsyncAzureOpenAI, AsyncOpenAI
@@ -43,13 +45,16 @@ from .const import (
     CONF_CONTEXT_THRESHOLD,
     CONF_CONTEXT_TRUNCATE_STRATEGY,
     CONF_FUNCTIONS,
+    CONF_MAX_COMPLETION_TOKENS,
     CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     CONF_MAX_TOKENS,
     CONF_ORGANIZATION,
     CONF_PROMPT,
+    CONF_REASONING_EFFORT,
     CONF_SKIP_AUTHENTICATION,
     CONF_TEMPERATURE,
     CONF_TOP_P,
+    CONF_USE_RESPONSES_API,
     CONF_USE_TOOLS,
     DEFAULT_ATTACH_USERNAME,
     DEFAULT_CHAT_MODEL,
@@ -59,9 +64,11 @@ from .const import (
     DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_MAX_TOKENS,
     DEFAULT_PROMPT,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_SKIP_AUTHENTICATION,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
+    DEFAULT_USE_RESPONSES_API,
     DEFAULT_USE_TOOLS,
     DOMAIN,
     EVENT_CONVERSATION_FINISHED,
@@ -74,6 +81,7 @@ from .exceptions import (
     TokenLengthExceededError,
 )
 from .helpers import get_function_executor, is_azure, validate_authentication
+from .responses_adapter import model_is_reasoning, responses_to_chat_like
 from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -154,11 +162,48 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             )
         # Cache current platform data which gets added to each request (caching done by library)
         _ = hass.async_add_executor_job(self.client.platform_headers)
+        self._responses_max_tokens_param = self._detect_responses_max_tokens_param()
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
         """Return a list of supported languages."""
         return MATCH_ALL
+
+    def _should_use_responses_api(self, model: str) -> bool:
+        use_responses = self.entry.options.get(
+            CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API
+        )
+        return use_responses or model_is_reasoning(model)
+
+    def _detect_responses_max_tokens_param(self) -> str | None:
+        create_method = getattr(getattr(self.client, "responses", None), "create", None)
+        if create_method is None:
+            return None
+        try:
+            parameters = inspect.signature(create_method).parameters
+        except (TypeError, ValueError):
+            return None
+        if "max_completion_tokens" in parameters:
+            return "max_completion_tokens"
+        if "max_output_tokens" in parameters:
+            return "max_output_tokens"
+        return None
+
+    def _messages_to_responses_input(self, messages: list[dict]) -> list[dict]:
+        responses_messages: list[dict] = []
+        for message in messages:
+            cloned = deepcopy(message)
+            content = cloned.get("content")
+            if isinstance(content, list):
+                processed_content = []
+                for item in content:
+                    if hasattr(item, "model_dump"):
+                        processed_content.append(item.model_dump())
+                    else:
+                        processed_content.append(item)
+                cloned["content"] = processed_content
+            responses_messages.append(cloned)
+        return responses_messages
 
     async def async_process(
         self, user_input: conversation.ConversationInput
@@ -348,27 +393,75 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         ):
             function_call = "none"
 
-        tool_kwargs = {"functions": functions, "function_call": function_call}
-        if use_tools:
-            tool_kwargs = {
-                "tools": [{"type": "function", "function": func} for func in functions],
-                "tool_choice": function_call,
-            }
+        chat_tool_kwargs: dict = {}
+        responses_tool_kwargs: dict = {}
 
-        if len(functions) == 0:
-            tool_kwargs = {}
+        if functions:
+            if use_tools:
+                chat_tool_kwargs = {
+                    "tools": [
+                        {"type": "function", "function": func} for func in functions
+                    ],
+                    "tool_choice": function_call,
+                }
+            else:
+                chat_tool_kwargs = {
+                    "functions": functions,
+                    "function_call": function_call,
+                }
+
+            responses_tool_kwargs = {
+                "tools": [
+                    {"type": "function", "function": func} for func in functions
+                ]
+            }
+            if function_call:
+                responses_tool_kwargs["tool_choice"] = function_call
 
         _LOGGER.info("Prompt for %s: %s", model, json.dumps(messages))
 
-        response: ChatCompletion = await self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            temperature=temperature,
-            user=user_input.conversation_id,
-            **tool_kwargs,
-        )
+        should_use_responses = self._should_use_responses_api(model)
+
+        if should_use_responses:
+            reasoning_effort = self.entry.options.get(
+                CONF_REASONING_EFFORT, DEFAULT_REASONING_EFFORT
+            )
+            _LOGGER.debug(
+                "Extended OAI: Using Responses API (effort=%s)", reasoning_effort
+            )
+            responses_kwargs = {
+                "model": model,
+                "input": self._messages_to_responses_input(messages),
+                "temperature": temperature,
+                "top_p": top_p,
+                "user": user_input.conversation_id,
+            }
+            if model_is_reasoning(model):
+                responses_kwargs["reasoning"] = {"effort": reasoning_effort}
+            responses_kwargs.update(responses_tool_kwargs)
+            max_completion_tokens = self.entry.options.get(CONF_MAX_COMPLETION_TOKENS)
+            max_tokens_param = self._responses_max_tokens_param
+            if (
+                max_completion_tokens is not None
+                and isinstance(max_completion_tokens, (int, float))
+                and max_tokens_param
+            ):
+                responses_kwargs[max_tokens_param] = int(max_completion_tokens)
+
+            response_obj = await self.client.responses.create(**responses_kwargs)
+            response_dict = responses_to_chat_like(response_obj)
+            response: ChatCompletion = ChatCompletion.model_validate(response_dict)
+        else:
+            _LOGGER.debug("Extended OAI: Using Chat Completions API")
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                temperature=temperature,
+                user=user_input.conversation_id,
+                **chat_tool_kwargs,
+            )
 
         _LOGGER.info("Response %s", json.dumps(response.model_dump(exclude_none=True)))
 
