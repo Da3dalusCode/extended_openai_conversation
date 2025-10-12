@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-REASONING_MODELS = {"gpt-5-thinking", "o3", "o4", "gpt-4.1"}
-REASONING_PREFIXES = ("gpt-5",)
+REASONING_MODELS = {"gpt-4.1"}
+REASONING_PREFIXES = ("gpt-5", "o3", "o4")
 
 
 def model_is_reasoning(model: str | None) -> bool:
@@ -15,6 +15,8 @@ def model_is_reasoning(model: str | None) -> bool:
         return False
     normalized = model.lower()
     if any(normalized.startswith(prefix) for prefix in REASONING_PREFIXES):
+        return True
+    if "-thinking" in normalized:
         return True
     return normalized in REASONING_MODELS
 
