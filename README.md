@@ -55,15 +55,86 @@ https://github.com/jekalmin/extended_openai_conversation/assets/2917984/64ba656e
 ## Configuration
 ### Options
 By clicking a button from Edit Assist, Options can be customized.<br/>
-Options include [OpenAI Conversation](https://www.home-assistant.io/integrations/openai_conversation/) options and two new options. 
+Options include [OpenAI Conversation](https://www.home-assistant.io/integrations/openai_conversation/) options and two new options.
 
 - `Attach Username`: Pass the active user's name (if applicable) to OpenAI via the message payload. Currently, this only applies to conversations through the UI or REST API.
 
 - `Maximum Function Calls Per Conversation`: limit the number of function calls in a single conversation.
-(Sometimes function is called over and over again, possibly running into infinite loop) 
+(Sometimes function is called over and over again, possibly running into infinite loop)
 - `Functions`: A list of mappings of function spec to function.
   - `spec`: Function which would be passed to [functions](https://platform.openai.com/docs/api-reference/chat/create#chat-create-functions) of [chat API](https://platform.openai.com/docs/api-reference/chat/create).
   - `function`: function that will be called.
+
+### Using GPT-5 / Responses API (reasoning)
+
+Extended OpenAI Conversation now supports OpenAI's Responses API so you can unlock GPT-5 Thinking and other reasoning-tier models while keeping the existing Chat Completions path for non-reasoning models. The integration automatically detects reasoning models (any model name starting with `gpt-5` as well as `gpt-5-thinking`, `o3`, `o4`, and `gpt-4.1`) and routes them through the Responses API even if the toggle is off, ensuring `reasoning.effort` is always applied.
+
+**Enable the Responses API path**
+
+1. Go to **Settings → Voice Assistants → Edit Assist → Options**.
+2. Toggle **Use Responses API** on (this is optional for GPT-4o/GPT-4o-mini, but recommended when experimenting with GPT-5).
+3. Choose a **Reasoning Effort** (`low`, `medium`, or `high`). The default `low` is ideal for Home Assistant automations because it keeps latency manageable.
+4. (Optional) Set **Max completion tokens** when using reasoning models. Start with `800`–`1200` for longer reasoning outputs.
+5. Ensure **Use Tools** is enabled so the model can continue to call `execute_service` via native Home Assistant services.
+
+For GPT-4o / GPT-4o mini nothing changes by default—those models stay on the Chat Completions API unless you explicitly toggle the Responses API.
+
+**Memory via Home Assistant rest_command**
+
+GPT-5 Thinking can call Home Assistant services directly through the existing `execute_service` tool, which means you can integrate an external memory service with zero YAML intents:
+
+```yaml
+# configuration.yaml
+rest_command:
+  memory_write:
+    url: http://localhost:8000/memories/write
+    method: POST
+    content_type: application/json
+    payload: '{"content": "{{ content }}", "namespace": "companion"}'
+  memory_ask:
+    url: http://localhost:8000/memories/ask
+    method: POST
+    content_type: application/json
+    payload: '{"query": "{{ query }}", "k": 5}'
+```
+
+The model can write or query by calling the existing native tool:
+
+```json
+{
+  "domain": "rest_command",
+  "service": "memory_write",
+  "service_data": {"content": "my favorite tea is yerba mate"}
+}
+```
+
+```json
+{
+  "domain": "rest_command",
+  "service": "memory_ask",
+  "service_data": {"query": "what is my favorite tea?"}
+}
+```
+
+Suggested prompt template addition (paste into **Prompt Template** inside Options):
+
+```
+If the user says "remember ...", extract the fact and call `execute_service` with `domain="rest_command"`, `service="memory_write"`, and pass the extracted `content`. If the user asks about a preference ("what's my...", "do you remember..."), call `execute_service` with `domain="rest_command"`, `service="memory_ask"`, `query` equal to the user's question. After writes, confirm succinctly; after asks, summarize the results. Prefer local intents for lights/media; otherwise use Home Assistant services via tools.
+```
+
+**Troubleshooting**
+
+- Error `Unsupported parameter max_tokens`: you are still hitting the Chat Completions path—enable **Use Responses API** or switch to a reasoning model.
+- Error about `max_completion_tokens`: update Home Assistant to pick up the latest integration version and ensure you are on `openai>=1.40.0`.
+- No tool calls arriving: verify **Use Tools** is on and that your function schema still exposes `execute_services`.
+
+**Quick validation**
+
+- Configure a temporary `rest_command` pointing at https://httpbin.org/post and ask GPT-5 Thinking to "remember" a fact—the Responses API path will call `execute_service` and you can inspect the Home Assistant log for the outbound POST.
+
+**Preview release tag**
+
+After upgrading, tag the branch with `v0.1.0-gpt5-preview` (or a later preview tag) so HACS users can install this reasoning-enabled build.
 
 
 | Edit Assist                                                                                                                                  | Options                                                                                                                                                                       |
