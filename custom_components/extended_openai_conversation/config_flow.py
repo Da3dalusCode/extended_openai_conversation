@@ -33,30 +33,37 @@ from .const import (
     CONF_CONTEXT_THRESHOLD,
     CONF_CONTEXT_TRUNCATE_STRATEGY,
     CONF_FUNCTIONS,
+    CONF_MAX_COMPLETION_TOKENS,
     CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     CONF_MAX_TOKENS,
     CONF_ORGANIZATION,
+    CONF_REASONING_EFFORT,
     CONF_PROMPT,
     CONF_SKIP_AUTHENTICATION,
     CONF_TEMPERATURE,
     CONF_TOP_P,
+    CONF_USE_RESPONSES_API,
     CONF_USE_TOOLS,
     CONTEXT_TRUNCATE_STRATEGIES,
     DEFAULT_ATTACH_USERNAME,
     DEFAULT_CHAT_MODEL,
+    DEFAULT_MAX_COMPLETION_TOKENS,
     DEFAULT_CONF_BASE_URL,
     DEFAULT_CONF_FUNCTIONS,
     DEFAULT_CONTEXT_THRESHOLD,
     DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_MAX_TOKENS,
     DEFAULT_NAME,
     DEFAULT_PROMPT,
+    DEFAULT_USE_RESPONSES_API,
     DEFAULT_SKIP_AUTHENTICATION,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     DEFAULT_USE_TOOLS,
     DOMAIN,
+    REASONING_EFFORT_OPTIONS,
 )
 from .helpers import validate_authentication
 
@@ -88,6 +95,9 @@ DEFAULT_OPTIONS = types.MappingProxyType(
         CONF_FUNCTIONS: DEFAULT_CONF_FUNCTIONS_STR,
         CONF_ATTACH_USERNAME: DEFAULT_ATTACH_USERNAME,
         CONF_USE_TOOLS: DEFAULT_USE_TOOLS,
+        CONF_USE_RESPONSES_API: DEFAULT_USE_RESPONSES_API,
+        CONF_REASONING_EFFORT: DEFAULT_REASONING_EFFORT,
+        CONF_MAX_COMPLETION_TOKENS: DEFAULT_MAX_COMPLETION_TOKENS,
         CONF_CONTEXT_THRESHOLD: DEFAULT_CONTEXT_THRESHOLD,
         CONF_CONTEXT_TRUNCATE_STRATEGY: DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
     }
@@ -239,6 +249,41 @@ class OptionsFlow(config_entries.OptionsFlow):
                 description={"suggested_value": options.get(CONF_USE_TOOLS)},
                 default=DEFAULT_USE_TOOLS,
             ): BooleanSelector(),
+            vol.Optional(
+                CONF_USE_RESPONSES_API,
+                description={
+                    "suggested_value": options.get(
+                        CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API
+                    )
+                },
+                default=DEFAULT_USE_RESPONSES_API,
+            ): BooleanSelector(),
+            vol.Optional(
+                CONF_REASONING_EFFORT,
+                description={
+                    "suggested_value": options.get(
+                        CONF_REASONING_EFFORT, DEFAULT_REASONING_EFFORT
+                    )
+                },
+                default=DEFAULT_REASONING_EFFORT,
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value=option, label=option.title())
+                        for option in REASONING_EFFORT_OPTIONS
+                    ],
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(
+                CONF_MAX_COMPLETION_TOKENS,
+                description={
+                    "suggested_value": options.get(
+                        CONF_MAX_COMPLETION_TOKENS, DEFAULT_MAX_COMPLETION_TOKENS
+                    )
+                },
+                default=DEFAULT_MAX_COMPLETION_TOKENS,
+            ): vol.Any(int, None),
             vol.Optional(
                 CONF_CONTEXT_THRESHOLD,
                 description={"suggested_value": options.get(CONF_CONTEXT_THRESHOLD)},

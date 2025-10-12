@@ -66,6 +66,79 @@ Options include [OpenAI Conversation](https://www.home-assistant.io/integrations
   - `function`: function that will be called.
 
 
+### Using GPT-5 / Responses API (reasoning)
+
+The integration now supports the OpenAI Responses API so you can unlock GPT-5 Thinking models without breaking existing assistants.
+
+1. Open **Settings → Voice Assistants → (your assistant) → Options** and enable **Use Responses API**.
+2. Set **Reasoning effort** to the model's target level (we recommend keeping it at `low`).
+3. Provide a **Max completion tokens** budget for reasoning models – `800` to `1200` keeps latency in check while allowing multi-step answers.
+4. Leave **Use Tools** ON so GPT-5 can continue to invoke the Home Assistant `execute_service` function directly.
+
+Reasoning models are auto-detected: if the configured model name starts with `gpt-5` or matches `gpt-5-thinking`, `o3`, `o4`, or `gpt-4.1`, the integration forces the Responses API path and applies the configured reasoning effort even when the toggle is off. Other models (such as `gpt-4o`/`gpt-4o-mini`) keep using the Chat Completions API by default, so your local-first automations continue to behave exactly as before.
+
+You can confirm which path is used by setting Home Assistant logging to `debug` for this integration – look for log entries like `Extended OAI: Using Responses API (effort=low)`.
+
+**Troubleshooting tips**
+
+- `Unsupported parameter max_tokens` – this means the Responses API was not selected. Enable **Use Responses API** or switch to a non-reasoning model.
+- `Invalid value for reasoning.effort` – update the option to one of `low`, `medium`, or `high` and verify the installed `openai` package is at least `1.40.0`.
+
+#### Memory service via `rest_command`
+
+GPT-5 Thinking can now call Home Assistant services natively, which means you can wire custom REST memories without YAML intents. Define two `rest_command` entries in your Home Assistant configuration:
+
+```yaml
+rest_command:
+  memory_write:
+    url: "http://localhost:8000/memories/write"
+    method: POST
+    content_type: application/json
+    payload: |
+      {"content": "{{ content }}", "namespace": "companion"}
+  memory_ask:
+    url: "http://localhost:8000/memories/ask"
+    method: POST
+    content_type: application/json
+    payload: |
+      {"query": "{{ query }}", "k": 5}
+```
+
+Add this snippet to your prompt template so the assistant knows when to persist or recall information:
+
+```
+If the user says "remember …", extract the fact and call execute_service with domain="rest_command", service="memory_write", and populate service_data.content with the extracted fact. If the user asks about a preference or past event, call execute_service with domain="rest_command", service="memory_ask", and service_data.query mirroring the question. After writing, acknowledge briefly; after asking, summarise the retrieved results.
+```
+
+Example model tool calls emitted by GPT-5:
+
+- **Write memory**
+
+  ```json
+  {
+    "domain": "rest_command",
+    "service": "memory_write",
+    "service_data": {
+      "content": "my favorite tea is yerba mate"
+    }
+  }
+  ```
+
+- **Query memory**
+
+  ```json
+  {
+    "domain": "rest_command",
+    "service": "memory_ask",
+    "service_data": {
+      "query": "what is my favorite tea?"
+    }
+  }
+  ```
+
+To validate your setup, expose a fake endpoint such as `https://httpbin.org/post` in place of the memory service, trigger an assistant query that should store a fact, and check Home Assistant's logs for the outgoing `execute_service` call.
+
+
 | Edit Assist                                                                                                                                  | Options                                                                                                                                                                       |
 |----------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | <img width="608" alt="1" src="https://github.com/jekalmin/extended_openai_conversation/assets/2917984/bb394cd4-5790-4ac9-9311-dbcab0fcca56"> | <img width="591" alt="스크린샷 2023-10-10 오후 10 53 57" src="https://github.com/jekalmin/extended_openai_conversation/assets/2917984/431e4bc5-87a0-4d7b-8da0-6273f955877f"> |
@@ -613,6 +686,14 @@ Get last changed date time of state | Get state at specific time
 
 ## Practical Usage
 See more practical [examples](https://github.com/jekalmin/extended_openai_conversation/tree/main/examples).
+
+## Preview release
+Add a tagged preview release once this branch is merged so HACS users can subscribe to the reasoning build. For example:
+
+```bash
+git tag v0.1.0-gpt5-preview
+git push origin v0.1.0-gpt5-preview
+```
 
 ## Logging
 In order to monitor logs of API requests and responses, add following config to `configuration.yaml` file
