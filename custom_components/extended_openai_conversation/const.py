@@ -94,6 +94,15 @@ CONTEXT_TRUNCATE_STRATEGIES = [{"key": "clear", "label": "Clear All Messages"}]
 CONF_CONTEXT_TRUNCATE_STRATEGY = "context_truncate_strategy"
 DEFAULT_CONTEXT_TRUNCATE_STRATEGY = CONTEXT_TRUNCATE_STRATEGIES[0]["key"]
 
+CONF_USE_RESPONSES_API = "use_responses_api"
+DEFAULT_USE_RESPONSES_API = False
+
+CONF_REASONING_EFFORT = "reasoning_effort"
+DEFAULT_REASONING_EFFORT = "low"
+REASONING_EFFORT_OPTIONS = ["low", "medium", "high"]
+
+CONF_MAX_COMPLETION_TOKENS = "max_completion_tokens"
+
 SERVICE_QUERY_IMAGE = "query_image"
 
 CONF_PAYLOAD_TEMPLATE = "payload_template"

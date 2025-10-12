@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
-from typing import Literal
+from typing import Any, Literal
 
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 from openai._exceptions import AuthenticationError, OpenAIError
@@ -40,30 +41,36 @@ from .const import (
     CONF_ATTACH_USERNAME,
     CONF_BASE_URL,
     CONF_CHAT_MODEL,
+    CONF_MAX_COMPLETION_TOKENS,
     CONF_CONTEXT_THRESHOLD,
     CONF_CONTEXT_TRUNCATE_STRATEGY,
     CONF_FUNCTIONS,
     CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     CONF_MAX_TOKENS,
     CONF_ORGANIZATION,
+    CONF_REASONING_EFFORT,
     CONF_PROMPT,
     CONF_SKIP_AUTHENTICATION,
     CONF_TEMPERATURE,
     CONF_TOP_P,
+    CONF_USE_RESPONSES_API,
     CONF_USE_TOOLS,
     DEFAULT_ATTACH_USERNAME,
     DEFAULT_CHAT_MODEL,
     DEFAULT_CONF_FUNCTIONS,
     DEFAULT_CONTEXT_THRESHOLD,
     DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
+    DEFAULT_REASONING_EFFORT,
     DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
     DEFAULT_MAX_TOKENS,
     DEFAULT_PROMPT,
+    DEFAULT_USE_RESPONSES_API,
     DEFAULT_SKIP_AUTHENTICATION,
     DEFAULT_TEMPERATURE,
     DEFAULT_TOP_P,
     DEFAULT_USE_TOOLS,
     DOMAIN,
+    REASONING_EFFORT_OPTIONS,
     EVENT_CONVERSATION_FINISHED,
 )
 from .exceptions import (
@@ -74,6 +81,7 @@ from .exceptions import (
     TokenLengthExceededError,
 )
 from .helpers import get_function_executor, is_azure, validate_authentication
+from .responses_adapter import responses_to_chat_like
 from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,6 +91,40 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 # hass.data key for agent.
 DATA_AGENT = "agent"
+
+
+_REASONING_MODEL_PREFIXES = ("gpt-5",)
+_REASONING_MODEL_EXACT = {
+    "gpt-5-thinking",
+    "o3",
+    "o4",
+    "gpt-4.1",
+}
+
+
+def model_is_reasoning(model: str | None) -> bool:
+    """Return True if the supplied model should use the Responses API."""
+
+    if not model:
+        return False
+
+    normalized = model.lower()
+    return normalized.startswith(_REASONING_MODEL_PREFIXES) or normalized in _REASONING_MODEL_EXACT
+
+
+def _resolve_responses_max_tokens_param(client: Any) -> str | None:
+    """Determine the supported max token parameter for the Responses API."""
+
+    try:
+        signature = inspect.signature(client.responses.create)
+    except (AttributeError, ValueError):
+        return None
+
+    for candidate in ("max_output_tokens", "max_completion_tokens"):
+        if candidate in signature.parameters:
+            return candidate
+
+    return None
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -154,6 +196,9 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             )
         # Cache current platform data which gets added to each request (caching done by library)
         _ = hass.async_add_executor_job(self.client.platform_headers)
+        self._responses_max_tokens_param = _resolve_responses_max_tokens_param(
+            self.client
+        )
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -334,9 +379,24 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         """Process a sentence."""
         model = self.entry.options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)
         max_tokens = self.entry.options.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
+        if isinstance(max_tokens, float):
+            max_tokens = int(max_tokens)
         top_p = self.entry.options.get(CONF_TOP_P, DEFAULT_TOP_P)
         temperature = self.entry.options.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
         use_tools = self.entry.options.get(CONF_USE_TOOLS, DEFAULT_USE_TOOLS)
+        use_responses_api = self.entry.options.get(
+            CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API
+        )
+        reasoning_effort = self.entry.options.get(
+            CONF_REASONING_EFFORT, DEFAULT_REASONING_EFFORT
+        )
+        max_completion_tokens = self.entry.options.get(CONF_MAX_COMPLETION_TOKENS)
+        if isinstance(max_completion_tokens, float):
+            max_completion_tokens = int(max_completion_tokens)
+        if reasoning_effort not in REASONING_EFFORT_OPTIONS:
+            reasoning_effort = DEFAULT_REASONING_EFFORT
+
+        should_use_responses = use_responses_api or model_is_reasoning(model)
         context_threshold = self.entry.options.get(
             CONF_CONTEXT_THRESHOLD, DEFAULT_CONTEXT_THRESHOLD
         )
@@ -348,27 +408,62 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         ):
             function_call = "none"
 
-        tool_kwargs = {"functions": functions, "function_call": function_call}
-        if use_tools:
-            tool_kwargs = {
-                "tools": [{"type": "function", "function": func} for func in functions],
-                "tool_choice": function_call,
-            }
+        function_tools = [
+            {"type": "function", "function": func} for func in functions
+        ]
 
-        if len(functions) == 0:
-            tool_kwargs = {}
+        chat_tool_kwargs: dict[str, Any] = {}
+        if functions:
+            if use_tools:
+                chat_tool_kwargs = {
+                    "tools": function_tools,
+                    "tool_choice": function_call,
+                }
+            else:
+                chat_tool_kwargs = {
+                    "functions": functions,
+                    "function_call": function_call,
+                }
+
+        responses_tool_kwargs: dict[str, Any] = {}
+        if functions:
+            responses_tool_kwargs = {
+                "tools": function_tools,
+                "tool_choice": "none" if function_call == "none" else "auto",
+            }
 
         _LOGGER.info("Prompt for %s: %s", model, json.dumps(messages))
 
-        response: ChatCompletion = await self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            temperature=temperature,
-            user=user_input.conversation_id,
-            **tool_kwargs,
-        )
+        if should_use_responses:
+            _LOGGER.debug(
+                "Extended OAI: Using Responses API (effort=%s)", reasoning_effort
+            )
+            responses_kwargs: dict[str, Any] = {
+                "model": model,
+                "input": messages,
+                "temperature": temperature,
+                "top_p": top_p,
+                **responses_tool_kwargs,
+            }
+            if reasoning_effort:
+                responses_kwargs["reasoning"] = {"effort": reasoning_effort}
+            if max_completion_tokens and self._responses_max_tokens_param:
+                responses_kwargs[self._responses_max_tokens_param] = max_completion_tokens
+
+            raw_response = await self.client.responses.create(**responses_kwargs)
+            chat_like_payload = responses_to_chat_like(raw_response)
+            response = ChatCompletion.model_validate(chat_like_payload)
+        else:
+            _LOGGER.debug("Extended OAI: Using Chat Completions API")
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                temperature=temperature,
+                user=user_input.conversation_id,
+                **chat_tool_kwargs,
+            )
 
         _LOGGER.info("Response %s", json.dumps(response.model_dump(exclude_none=True)))
 

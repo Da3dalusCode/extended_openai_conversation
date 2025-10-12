@@ -71,6 +71,77 @@ Options include [OpenAI Conversation](https://www.home-assistant.io/integrations
 | <img width="608" alt="1" src="https://github.com/jekalmin/extended_openai_conversation/assets/2917984/bb394cd4-5790-4ac9-9311-dbcab0fcca56"> | <img width="591" alt="스크린샷 2023-10-10 오후 10 53 57" src="https://github.com/jekalmin/extended_openai_conversation/assets/2917984/431e4bc5-87a0-4d7b-8da0-6273f955877f"> |
 
 
+## Using GPT-5 / Responses API (reasoning)
+
+### Enabling the Responses API
+
+1. Open **Settings → Voice Assistants → Extended OpenAI Conversation → Options**.
+2. Enable **Use Responses API** and select the desired **Reasoning Effort** (`low`, `medium`, or `high`).
+3. (Optional) Provide **Max completion tokens** when you need to cap the reasoning output (recommended range 800–1200).
+4. Save the options and restart the conversation; the integration automatically normalises the Responses payload back into the classic chat structure used elsewhere in Home Assistant.
+
+> **Auto-detect:** If you choose a reasoning-capable model (`gpt-5*`, `gpt-5-thinking`, `o3`, `o4`, or `gpt-4.1`), the Responses API is forced on—even when the toggle is off—so tools and reasoning metadata continue to work without extra YAML intents.
+
+### Recommended settings
+
+- Reasoning Effort: **low** (balanced latency and quality)
+- Max completion tokens: **800–1200** when you expect long answers or multiple tool results
+- Use Tools: **ON** so models can call `execute_service` for Home Assistant automations and memory services
+
+### Memory service via `rest_command`
+
+You can wire an external memory service with pure function-calling—no intents required. Add the following to `configuration.yaml`:
+
+```yaml
+rest_command:
+  memory_write:
+    url: "https://example.com/memories/write"
+    method: POST
+    content_type: application/json
+    payload: '{"content": "{{ content }}", "namespace": "companion"}'
+  memory_ask:
+    url: "https://example.com/memories/ask"
+    method: POST
+    content_type: application/json
+    payload: '{"query": "{{ query }}", "k": 5}'
+```
+
+With the default `execute_service` tool, GPT-5 can now remember or retrieve facts using:
+
+- **Write:**
+  ```json
+  {
+    "domain": "rest_command",
+    "service": "memory_write",
+    "service_data": {"content": "my favourite tea is yerba mate"}
+  }
+  ```
+- **Ask:**
+  ```json
+  {
+    "domain": "rest_command",
+    "service": "memory_ask",
+    "service_data": {"query": "what is my favourite tea?"}
+  }
+  ```
+
+To validate the wiring without a dedicated service, temporarily point the commands at `https://httpbin.org/post` and watch Home Assistant’s debug logs for the outbound call when the assistant invokes `execute_service`.
+
+### Prompt template snippet
+
+Add the following guidance to your prompt template so the model knows when to write or query memories:
+
+```
+If the user says "remember ...", extract the fact and call execute_service with domain=rest_command, service=memory_write, and the extracted content. If the user asks "what's my..." or "do you remember...", call execute_service with domain=rest_command, service=memory_ask, query set to the user request. After writing, acknowledge briefly; after asking, summarise the results.
+```
+
+### Troubleshooting
+
+- **`Unsupported parameter max_tokens`** – this means the Chat Completions path was used; enable **Use Responses API** or switch to a reasoning model so the integration sends `max_completion_tokens`/`max_output_tokens` instead.
+- **No tool calls in the transcript** – confirm **Use Tools** remains enabled and that your functions YAML still defines the `execute_service` native function.
+- **Model refuses to reason** – verify the option saved and that the model name matches the reasoning list above; auto-detect overrides the toggle for supported GPT-5+ families.
+
+
 ### Functions
 
 #### Supported function types
@@ -622,3 +693,12 @@ logger:
   logs:
     custom_components.extended_openai_conversation: info
 ```
+
+## Preview release
+
+After merging your changes into `feat/responses-api-gpt5`, publish a tagged preview so HACS users can test GPT-5 reasoning:
+
+1. Push the branch and open a pull request targeting your Home Assistant instance.
+2. Merge when checks pass.
+3. Tag the commit with `v0.1.0-gpt5-preview` (or a later `*-gpt5-preview` tag) and push the tag.
+4. Point HACS at the repository/tag to distribute the preview build.
