@@ -39,9 +39,11 @@ from .const import (
 REASONING_EFFORT_CHOICES = ["", "low", "medium", "high"]  # "" = unset / default
 TRUNCATE_STRATEGIES = ["keep_latest", "clear_all"]
 
+
 def _opt(entry: config_entries.ConfigEntry, key: str, default):
     # prefer options, fallback to data, then default
     return entry.options.get(key, entry.data.get(key, default))
+
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Initial setup: collect connection + a default model."""
@@ -51,7 +53,6 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            # Only allow a single entry
             await self.async_set_unique_id(DOMAIN)
             self._abort_if_unique_id_configured()
             return self.async_create_entry(
@@ -76,6 +77,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @staticmethod
     def async_get_options_flow(entry: config_entries.ConfigEntry):
         return OptionsFlowHandler(entry)
+
 
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Single-screen options; matches what __init__.py expects."""
