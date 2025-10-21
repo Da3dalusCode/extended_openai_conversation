@@ -1,4 +1,5 @@
-"""Extended OpenAI Conversation – GPT‑5 ready, non‑streaming Responses, HA/Assist‑compatible result shape, with entry migration."""
+# /config/custom_components/extended_openai_conversation/__init__.py
+"""Extended OpenAI Conversation – GPT‑5 ready, non‑streaming Responses, HA/Assist‑compatible result shape."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ from typing import Any, Optional
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 # Exception compatibility across SDK versions
 try:
-    from openai._exceptions import AuthenticationError, OpenAIError  # type: ignore
+    from openai._exceptions import AuthenticationError, OpenAIError
 except Exception:  # pragma: no cover
     try:
         from openai import AuthenticationError  # type: ignore[attr-defined]
@@ -117,28 +118,13 @@ def _build_result(text: str, *, language: Optional[str], conversation_id: Option
         continue_conversation=cont,
     )
 
-# ---------- HA setup + migration ----------
+# ---------- HA setup boilerplate ----------
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 DATA_AGENT = "agent"
 
 async def async_setup(hass: HomeAssistant, config) -> bool:
     return True
-
-async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Normalize any previous config-entry versions to our target (1)."""
-    target = 1
-    if entry.version == target:
-        return True
-    _LOGGER.info("Migrating %s entry '%s' from v%s to v%s", DOMAIN, entry.title, entry.version, target)
-    try:
-        # Do not alter data/options; just normalize version.
-        hass.config_entries.async_update_entry(entry, data=entry.data, options=entry.options, version=target)
-        _LOGGER.info("Migration complete for '%s'", entry.title)
-        return True
-    except Exception:  # be explicit in logs; let HA show banner if False
-        _LOGGER.exception("Migration failed for '%s'", entry.title)
-        return False
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api_key = entry.options.get(CONF_API_KEY) or entry.data.get(CONF_API_KEY)
@@ -430,8 +416,10 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         if is_reasoning and reasoning_effort in ("low", "medium", "high"):
             params["reasoning"] = {"effort": reasoning_effort}
         # Force non-streaming until we implement event consumption
+        # (stream argument ignored on purpose)
         resp = await self.client.responses.create(**params)
 
+        # Prefer SDK convenience accessor when available
         text = getattr(resp, "output_text", None)
         if text is None:
             try:
@@ -448,7 +436,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
                     text = ""
 
         return self._Result(text=text or "", usage=getattr(resp, "usage", None), tool_calls=[])
-
+    
     # --- system prompt composer compatibility ---
 
     class _Sections:
