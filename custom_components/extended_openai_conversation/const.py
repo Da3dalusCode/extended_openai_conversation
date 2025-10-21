@@ -1,156 +1,114 @@
-"""Constants for the Extended OpenAI Conversation integration."""
+# custom_components/extended_openai_conversation/const.py
+from __future__ import annotations
 
 DOMAIN = "extended_openai_conversation"
-DEFAULT_NAME = "Extended OpenAI Conversation"
-CONF_ORGANIZATION = "organization"
+
+# ----- Config entry versioning (major/minor) -----
+CONFIG_ENTRY_VERSION = 1
+CONFIG_ENTRY_MINOR_VERSION = 0  # bump when you make backward-compatible data tweaks
+
+# ----- Core auth / API settings -----
+CONF_API_KEY = "api_key"
 CONF_BASE_URL = "base_url"
-DEFAULT_CONF_BASE_URL = "https://api.openai.com/v1"
 CONF_API_VERSION = "api_version"
-CONF_SKIP_AUTHENTICATION = "skip_authentication"
-DEFAULT_SKIP_AUTHENTICATION = False
-
-EVENT_AUTOMATION_REGISTERED = "automation_registered_via_extended_openai_conversation"
-EVENT_CONVERSATION_FINISHED = "extended_openai_conversation.conversation.finished"
-
-CONF_PROMPT = "prompt"
-DEFAULT_PROMPT = """I want you to act as smart home manager of Home Assistant.
-I will provide information of smart home along with a question, you will truthfully make correction or answer using information provided in one sentence in everyday language.
-
-Current Time: {{now()}}
-
-Available Devices:
-```csv
-entity_id,name,state,aliases
-{% for entity in exposed_entities -%}
-{{ entity.entity_id }},{{ entity.name }},{{ entity.state }},{{entity.aliases | join('/')}}
-{% endfor -%}
-```
-
-The current state of devices is provided in available devices.
-Use execute_services function only for requested action, not for current states.
-Do not execute service without user's confirmation.
-Do not restate or appreciate what user says, rather make a quick inquiry.
-"""
+CONF_ORGANIZATION = "organization"
 CONF_CHAT_MODEL = "chat_model"
-DEFAULT_CHAT_MODEL = "gpt-4o-mini"
-CONF_MAX_TOKENS = "max_tokens"
-DEFAULT_MAX_TOKENS = 150
-CONF_TOP_P = "top_p"
-DEFAULT_TOP_P = 1
-CONF_TEMPERATURE = "temperature"
-DEFAULT_TEMPERATURE = 0.5
-CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION = "max_function_calls_per_conversation"
-DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION = 1
-CONF_FUNCTIONS = "functions"
-DEFAULT_CONF_FUNCTIONS = [
-    {
-        "spec": {
-            "name": "execute_services",
-            "description": "Use this function to execute service of devices in Home Assistant.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "list": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "domain": {
-                                    "type": "string",
-                                    "description": "The domain of the service",
-                                },
-                                "service": {
-                                    "type": "string",
-                                    "description": "The service to be called",
-                                },
-                                "service_data": {
-                                    "type": "object",
-                                    "description": "The service data object to indicate what to control.",
-                                    "properties": {
-                                        "entity_id": {
-                                            "type": "string",
-                                            "description": "The entity_id retrieved from available devices. It must start with domain, followed by dot character.",
-                                        }
-                                    },
-                                    "required": ["entity_id"],
-                                },
-                            },
-                            "required": ["domain", "service", "service_data"],
-                        },
-                    }
-                },
-            },
-        },
-        "function": {"type": "native", "name": "execute_service"},
-    }
-]
-CONF_ATTACH_USERNAME = "attach_username"
-DEFAULT_ATTACH_USERNAME = False
-CONF_USE_TOOLS = "use_tools"
-DEFAULT_USE_TOOLS = False
-CONF_USE_RESPONSES_API = "use_responses_api"
-DEFAULT_USE_RESPONSES_API = False
-CONF_MODEL_STRATEGY = "model_strategy"
+
+DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_CHAT_MODEL = "gpt-5"
+DEFAULT_API_VERSION = ""
+
+# ----- Model strategy + Responses API -----
+CONF_MODEL_STRATEGY = "model_strategy"            # "auto" | "force_chat" | "force_responses"
 MODEL_STRATEGY_AUTO = "auto"
 MODEL_STRATEGY_FORCE_CHAT = "force_chat"
 MODEL_STRATEGY_FORCE_RESPONSES = "force_responses"
-MODEL_STRATEGY_OPTIONS = [
-    MODEL_STRATEGY_AUTO,
-    MODEL_STRATEGY_FORCE_CHAT,
-    MODEL_STRATEGY_FORCE_RESPONSES,
-]
-DEFAULT_MODEL_STRATEGY = MODEL_STRATEGY_AUTO
-CONF_REASONING_EFFORT = "reasoning_effort"
-DEFAULT_REASONING_EFFORT = "low"
-REASONING_EFFORT_OPTIONS = ["low", "medium", "high"]
-CONF_MAX_COMPLETION_TOKENS = "max_completion_tokens"
+
+CONF_USE_RESPONSES_API = "use_responses_api"      # bool
+
+# ----- Reasoning effort -----
+CONF_REASONING_EFFORT = "reasoning_effort"        # "low" | "medium" | "high"
+REASONING_EFFORT_LOW = "low"
+REASONING_EFFORT_MEDIUM = "medium"
+REASONING_EFFORT_HIGH = "high"
+REASONING_EFFORT_ALLOWED = {REASONING_EFFORT_LOW, REASONING_EFFORT_MEDIUM, REASONING_EFFORT_HIGH}
+
+# ----- Streaming + sampling -----
+CONF_ENABLE_STREAMING = "enable_streaming"        # bool
+CONF_TEMPERATURE = "temperature"
+CONF_TOP_P = "top_p"
+
+# Tokens
+CONF_MAX_TOKENS = "max_tokens"                    # responses API return tokens
+CONF_MAX_COMPLETION_TOKENS = "max_completion_tokens"  # chat.completions fallback
+
+# ----- Context handling -----
 CONF_CONTEXT_THRESHOLD = "context_threshold"
-DEFAULT_CONTEXT_THRESHOLD = 13000
-CONTEXT_TRUNCATE_STRATEGIES = [{"key": "clear", "label": "Clear All Messages"}]
-CONF_CONTEXT_TRUNCATE_STRATEGY = "context_truncate_strategy"
-DEFAULT_CONTEXT_TRUNCATE_STRATEGY = CONTEXT_TRUNCATE_STRATEGIES[0]["key"]
+CONF_CONTEXT_TRUNCATE_STRATEGY = "context_truncate_strategy"  # "keep_latest" | "clear_all"
 
-CONF_ENABLE_STREAMING = "enable_streaming"
-DEFAULT_ENABLE_STREAMING = False
-CONF_STREAM_MIN_CHARS = "stream_min_chars"
-DEFAULT_STREAM_MIN_CHARS = 90
+TRUNCATE_KEEP_LATEST = "keep_latest"
+TRUNCATE_CLEAR_ALL = "clear_all"
+
+# ----- Misc conversation behaviors -----
+CONF_ATTACH_USERNAME = "attach_username"
 CONF_SPEAK_CONFIRMATION_FIRST = "speak_confirmation_first"
-DEFAULT_SPEAK_CONFIRMATION_FIRST = False
+CONF_STREAM_MIN_CHARS = "stream_min_chars"
+CONF_PROMPT = "prompt"
 
-CONF_PROACTIVITY_ENABLED = "proactivity_enabled"
-DEFAULT_PROACTIVITY_ENABLED = True
-CONF_PROACTIVITY_K = "proactivity_k"
-DEFAULT_PROACTIVITY_K = 3
-CONF_PROACTIVITY_MIN_SCORE = "proactivity_min_score"
-DEFAULT_PROACTIVITY_MIN_SCORE = 0.70
-
-CONF_BUDGET_PROFILE = "budget_profile"
-DEFAULT_BUDGET_PROFILE = 250
-CONF_BUDGET_SCRATCHPAD = "budget_scratchpad"
-DEFAULT_BUDGET_SCRATCHPAD = 200
-CONF_BUDGET_RETRIEVED = "budget_retrieved"
-DEFAULT_BUDGET_RETRIEVED = 600
-
-CONF_MEMORY_BASE_URL = "memory_base_url"
-CONF_MEMORY_API_KEY = "memory_api_key"
-CONF_MEMORY_DEFAULT_NAMESPACE = "memory_default_namespace"
-DEFAULT_MEMORY_DEFAULT_NAMESPACE = "corpus"
-CONF_MEMORY_WRITE_PATH = "memory_write_path"
-DEFAULT_MEMORY_WRITE_PATH = "/memories/write"
-CONF_MEMORY_SEARCH_PATH = "memory_search_path"
-DEFAULT_MEMORY_SEARCH_PATH = "/memories/search"
-
+# ----- Router / memory tooling knobs (kept for future use, safe defaults) -----
 CONF_ROUTER_FORCE_TOOLS = "router_force_tools"
-DEFAULT_ROUTER_FORCE_TOOLS = True
-CONF_ROUTER_WRITE_REGEX = "router_write_regex"
-DEFAULT_ROUTER_WRITE_REGEX = r"^(remember|save|note that|add to memory)\b"
 CONF_ROUTER_SEARCH_REGEX = "router_search_regex"
-DEFAULT_ROUTER_SEARCH_REGEX = (
-    r"^(what's my|what is my|do you remember|what did I say about)\b"
-)
+CONF_ROUTER_WRITE_REGEX = "router_write_regex"
+CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION = "max_function_calls_per_conversation"
 
-CONF_DRY_RUN = "dry_run"
+# Budgets (token budgeting if enabled later)
+CONF_BUDGET_PROFILE = "budget_profile"
+CONF_BUDGET_RETRIEVED = "budget_retrieved"
+CONF_BUDGET_SCRATCHPAD = "budget_scratchpad"
 
+# Memory service (placeholder constants so optional modules can import safely)
+CONF_MEMORY_BASE_URL = "memory_base_url"
+CONF_MEMORY_WRITE_PATH = "memory_write_path"
+CONF_MEMORY_SEARCH_PATH = "memory_search_path"
+CONF_MEMORY_ASK_PATH = "memory_ask_path"
+
+DEFAULT_MEMORY_WRITE_PATH = "/memories/write"
+DEFAULT_MEMORY_SEARCH_PATH = "/memories/search"
+DEFAULT_MEMORY_ASK_PATH = "/memories/ask"
+
+# ----- Service names / attrs (compat shims to stop import errors) -----
 SERVICE_QUERY_IMAGE = "query_image"
-
 CONF_PAYLOAD_TEMPLATE = "payload_template"
+EVENT_AUTOMATION_REGISTERED = "extended_openai_conversation_automation_registered"
+
+ATTR_IMAGES = "images"
+ATTR_PROMPT = "prompt"
+ATTR_RESPONSE = "response"
+
+# Reasonable defaults mirrored from your UI
+DEFAULTS = {
+    CONF_MODEL_STRATEGY: MODEL_STRATEGY_AUTO,
+    CONF_USE_RESPONSES_API: True,
+    CONF_REASONING_EFFORT: REASONING_EFFORT_LOW,
+    CONF_ENABLE_STREAMING: False,
+    CONF_TEMPERATURE: 0.3,
+    CONF_TOP_P: 1.0,
+    CONF_MAX_TOKENS: 320,
+    CONF_MAX_COMPLETION_TOKENS: 320,
+    CONF_CONTEXT_THRESHOLD: 13000,
+    CONF_CONTEXT_TRUNCATE_STRATEGY: TRUNCATE_KEEP_LATEST,
+    CONF_ATTACH_USERNAME: False,
+    CONF_SPEAK_CONFIRMATION_FIRST: False,
+    CONF_STREAM_MIN_CHARS: 90,
+    CONF_ROUTER_FORCE_TOOLS: False,
+    CONF_ROUTER_SEARCH_REGEX: r"^(what'?s my|what is my|do you remember|what did)",
+    CONF_ROUTER_WRITE_REGEX: r"^(remember|save|note that|add to memory)\b",
+    CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION: 1,
+    CONF_BUDGET_PROFILE: 250,
+    CONF_BUDGET_RETRIEVED: 600,
+    CONF_BUDGET_SCRATCHPAD: 200,
+    CONF_MEMORY_BASE_URL: "",
+    CONF_MEMORY_WRITE_PATH: DEFAULT_MEMORY_WRITE_PATH,
+    CONF_MEMORY_SEARCH_PATH: DEFAULT_MEMORY_SEARCH_PATH,
+    CONF_MEMORY_ASK_PATH: DEFAULT_MEMORY_ASK_PATH,
+}
