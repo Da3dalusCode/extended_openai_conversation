@@ -113,3 +113,27 @@ A Home Assistant custom integration that extends the stock `openai_conversation`
   homeassistant.components.assist_pipeline: debug
   homeassistant.components.conversation: debug
   custom_components.extended_openai_conversation: debug
+
+  ---
+
+  ## Privacy & Security
+
+- Your prompts are sent to the configured endpoint (OpenAI or compatible).
+- Don’t include secrets in prompts. Use environment/network isolation where needed.
+- Memory endpoints exist but are **off by default** in this release.
+
+---
+
+## Roadmap
+
+- Dialog history with token budgeting
+- Safe, gated tool routing for Home Assistant services
+- Local memory layer (FastAPI) integration toggles
+
+---
+
+## Credits
+
+- Based on [jekalmin/extended_openai_conversation]
+- Adapted for GPT-5 + Responses API and Assist compatibility.
+
