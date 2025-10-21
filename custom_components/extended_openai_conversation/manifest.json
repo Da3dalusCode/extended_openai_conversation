@@ -1,7 +1,7 @@
 {
   "domain": "extended_openai_conversation",
   "name": "Extended OpenAI Conversation",
-  "version": "v1.2.1",
+  "version": "1.2.2",
   "config_flow": true,
   "documentation": "https://github.com/Da3dalusCode/extended_openai_conversation",
   "issue_tracker": "https://github.com/Da3dalusCode/extended_openai_conversation/issues",
