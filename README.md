@@ -1,94 +1,120 @@
+<!-- README.md -->
 # Extended OpenAI Conversation (Home Assistant)
 
-**A drop-in conversation agent for Home Assistant with first-class GPT‑5 support.**  
-Works with Assist pipelines, supports OpenAI’s **Responses API** (reasoning models), and keeps memory/tools **optional** and **off by default** for reliability.
+**A drop-in conversation agent for Home Assistant with first-class GPT-5 support.**  
+Works with Assist pipelines, uses OpenAI’s **Responses API** for reasoning models, and keeps memory/tools **optional** and **off by default** for reliability.
 
-> This fork focuses on **stable voice UX** and **GPT‑5 compatibility**. The local memory/RAG layer is scaffolded but **disabled by default** until the core path is rock‑solid.
+> This fork focuses on **stable voice UX** and **GPT-5 compatibility**. The local memory/RAG layer is scaffolded but **disabled by default** until the core path is rock-solid.
 
 ---
 
 ## Why use this?
 
-- **GPT‑5** support via **Responses API**, including `reasoning.effort: low|medium|high`.
-- Clean, deterministic prompt assembly; safe default tone.
-- Plays nice with **Assist**: no websocket UI crashes, exposes `continue_conversation`.
-- **No streaming surprises** (intentionally off until a robust streaming path lands).
-- Memory/RAG **scaffolded** but **off** (easy to enable later).
+- **GPT-5** via **Responses API**, including `reasoning.effort: low|medium|high`
+- Clean, deterministic system prompt; safe default tone
+- Plays nice with **Assist**: correct result shape and `continue_conversation`
+- **Non-streaming by design** (keeps TTS stable while streaming is hardened)
+- Memory/RAG **scaffolded** but **off** (easy to enable later)
+
+---
+
+## Requirements
+
+- Home Assistant 2024.6+ (newer versions fine)
+- A working OpenAI API key (or a compatible endpoint)
+- Internet connectivity from HA to your endpoint
 
 ---
 
 ## Installation
 
 ### Option A — HACS (recommended)
-1. In HACS, add this repository as a **Custom repository** (Category: *Integration*).
-2. Install **Extended OpenAI Conversation**.
-3. **Restart Home Assistant.**
-4. Go to **Settings → Devices & Services → Add Integration** → *Extended OpenAI Conversation*.
-5. Enter your **OpenAI API key**. Leave Base URL as `https://api.openai.com/v1` unless using a compatible proxy.
+
+1. In HACS, add this repository as a **Custom repository** (Category: *Integration*).  
+2. Install **Extended OpenAI Conversation**.  
+3. **Restart Home Assistant**.  
+4. Go to **Settings → Devices & Services → Add Integration** and choose **Extended OpenAI Conversation**.  
+5. Enter your **OpenAI API key**.  
+   - Leave **Base URL** as `https://api.openai.com/v1` unless using a compatible proxy.  
+6. Finish the wizard.
 
 ### Option B — Manual
-Copy `custom_components/extended_openai_conversation` into your HA `/config/custom_components` folder → **Restart** → add the integration as above.
+
+Copy `custom_components/extended_openai_conversation` to `/config/custom_components` on your HA host → **Restart** → add the integration as above.
 
 ---
 
 ## Assign to your Voice Assistant
 
-1. **Settings → Voice assistants** → select your assistant.
-2. Under **Conversation agent**, pick **Extended OpenAI Conversation**.
-3. You may keep **Prefer handling commands locally** enabled—Assist will still short‑circuit simple HA intents locally.
+1. **Settings → Voice assistants** → select your assistant.  
+2. Under **Conversation agent**, pick **Extended OpenAI Conversation**.  
+3. You can leave **Prefer handling commands locally** enabled—Assist will still short-circuit simple HA intents locally.
 
 ---
 
-## Options (what matters)
+## Configuration & Options
+
+These settings are available from the integration’s **Configure** dialog.
 
 | Option | What it does | Recommended |
 |---|---|---|
-| **chat_model** | Model name | `gpt-5` |
-| **Use Responses API** | Uses Responses API when supported | ✅ On |
-| **Model strategy** | Auto/force chat/force responses | **Auto** |
-| **Reasoning effort** | GPT‑5 planning depth | `low` or `medium` |
-| **Max completion tokens** | Output length (Responses API) | `1024`–`2048` |
-| **Temperature / Top‑P** | Sampling | **Ignored by GPT‑5**; used for non‑reasoning models |
-| **Context threshold / Truncation** | When we include dialog history | Active once history is enabled |
+| **API key, Base URL** | OpenAI credentials and endpoint | Required; default URL for OpenAI |
+| **Model** | Name of the model | `gpt-5` |
+| **Model strategy** | Auto/force Chat/force Responses | **Auto** |
+| **Use Responses API** | Use Responses when supported | **On** |
+| **Reasoning effort** | GPT-5 planning depth | `low` or `medium` |
+| **Max completion tokens** | Output length on Responses API | `1024–2048` for long answers |
+| **Temperature / Top-P** | Sampling controls | **Ignored by GPT-5** (applied to non-reasoning models) |
+| **Context threshold / Truncation** | Token budget if dialog history is enabled | For large windows: threshold `32000`, strategy `keep_latest` (future) |
 
 **Notes**
-- GPT‑5 **ignores** temperature/top‑p; use **Reasoning effort** instead.
-- Streaming is intentionally disabled in this release to avoid partial speech in Assist.
-- Tools/memory are off—router patterns won’t trigger anything yet.
+
+- GPT-5 **ignores** `temperature/top_p`; set **Reasoning effort** instead.  
+- **Streaming** is intentionally **disabled** in this release to keep TTS/Assist deterministic.  
+- **Dialog history** and **tools/memory** are **off** for now; router patterns won’t trigger external tools yet.
 
 ---
 
-## Current status
+## Upgrade (HACS)
 
-- ✅ GPT‑5 via Responses (non‑streaming)  
-- ✅ Works with Assist; sets `continue_conversation` properly  
-- ✅ Proper config‑entry migration handler (no more “Migration handler not found”)  
-- ⏳ Dialog **history** and **memory/tools**: planned, off by default
+1. HACS → **Integrations** → open this repo.  
+2. If **Update** is visible, click it. Otherwise **⋮ → Reload data**, then **Reinstall** → select the newest version.  
+3. **Restart Home Assistant**.  
+4. Reopen the integration’s **Configure** to verify options.
+
+If HACS doesn’t show the update:
+- Ensure your Git tag is **`vX.Y.Z`** and `manifest.json` has `"version": "X.Y.Z"` (tag **with** `v`, manifest **without**).  
+- In HACS, **⋮ → Update information** to refresh the cache.
 
 ---
 
 ## Troubleshooting
 
-- **“Migration handler not found” banner**  
-  Update to ≥1.2.0. We added a real `async_migrate_entry()` and use HA’s `async_update_entry` under the hood. :contentReference[oaicite:0]{index=0}
+- **“Migration handler not found …” banner**  
+  Update to ≥1.2.1. This fork ships a proper `async_migrate_entry()` and uses HA’s `async_update_entry` to normalize versions.
 
-- **500 in Options / blank arrows**  
-  Caused by an options schema that returned a raw list (voluptuous‑serialize can’t convert lists). Fixed by a single‑screen options UI. :contentReference[oaicite:1]{index=1}
+- **Options screen fails / blank arrows**  
+  The options schema now returns a dict (no raw lists), which the UI can serialize. If you still see issues, clear browser cache and reload.
 
-- **ImportError referencing constants** (`CONF_PAYLOAD_TEMPLATE`, `DEFAULT_MEMORY_WRITE_PATH`, `SERVICE_QUERY_IMAGE`)  
-  Old forks referenced constants not present in some copies of `const.py`. We removed those imports and made memory/tools optional. 
-
-- **400 “Unsupported parameter: temperature”**  
-  That occurs when sending `temperature` to a GPT‑5 reasoning call. We suppress sampling params for GPT‑5 and use `reasoning.effort` instead.
+- **OpenAI 400: “Unsupported parameter: temperature”**  
+  Happens if `temperature` is sent to GPT-5 reasoning. We suppress classic sampling params for GPT-5 and use `reasoning.effort`.
 
 ---
 
 ## Privacy
 
-This integration sends prompts to OpenAI (or your configured compatible endpoint). No local memories are written unless you explicitly enable the memory layer later.
+Prompts are sent to OpenAI (or your configured compatible endpoint). No local memories are written unless you explicitly enable the memory layer later.
+
+---
+
+## Roadmap
+
+- In-session dialog history (token-budgeted)
+- Opt-in memory write/search tools
+- Streaming once the Assist TTS path is robust with partials
 
 ---
 
 ## Credits
 
-Based on the original project by @jekalmin; this fork focuses on GPT‑5 compatibility and voice reliability.
+Based on the original project by **@jekalmin**. This fork focuses on GPT-5 compatibility and voice reliability.
