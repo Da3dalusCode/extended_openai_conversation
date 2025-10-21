@@ -1,4 +1,13 @@
-"""Extended OpenAI Conversation – GPT‑5 ready, non‑streaming Responses, HA/Assist‑compatible result shape, with entry migration."""
+# /config/custom_components/extended_openai_conversation/__init__.py
+"""
+Extended OpenAI Conversation – Home Assistant integration
+
+Highlights in this build:
+- GPT-5 via Responses API (non-streaming), with reasoning effort (low|medium|high)
+- Stable Assist compatibility: returns response.speech/plain and continue_conversation
+- Safe config-entry migration via hass.config_entries.async_update_entry
+- Composer signature compatibility + conservative imports
+"""
 
 from __future__ import annotations
 
@@ -6,8 +15,9 @@ import logging
 from typing import Any, Optional
 
 from openai import AsyncAzureOpenAI, AsyncOpenAI
-# Exception compatibility across SDK versions
-try:
+
+# Robust exception imports across OpenAI SDK versions
+try:  # pragma: no cover
     from openai._exceptions import AuthenticationError, OpenAIError  # type: ignore
 except Exception:  # pragma: no cover
     try:
@@ -29,56 +39,109 @@ from homeassistant.components import conversation
 
 from .const import (
     DOMAIN,
+    # entry versioning
+    CONFIG_ENTRY_VERSION,
+    CONFIG_ENTRY_MINOR_VERSION,
     # auth / endpoints
-    CONF_BASE_URL, CONF_API_VERSION, CONF_API_KEY, CONF_ORGANIZATION, CONF_SKIP_AUTHENTICATION,
+    CONF_API_KEY,
+    CONF_BASE_URL,
+    CONF_API_VERSION,
+    CONF_ORGANIZATION,
     # model + strategy
-    CONF_CHAT_MODEL, CONF_MODEL_STRATEGY, MODEL_STRATEGY_FORCE_CHAT, MODEL_STRATEGY_FORCE_RESPONSES,
-    DEFAULT_CHAT_MODEL, DEFAULT_MODEL_STRATEGY,
-    # generation
-    CONF_ENABLE_STREAMING, CONF_TEMPERATURE, CONF_TOP_P, CONF_MAX_TOKENS, CONF_MAX_COMPLETION_TOKENS,
-    DEFAULT_ENABLE_STREAMING, DEFAULT_TEMPERATURE, DEFAULT_TOP_P, DEFAULT_MAX_TOKENS,
+    CONF_CHAT_MODEL,
+    CONF_MODEL_STRATEGY,
+    MODEL_STRATEGY_FORCE_CHAT,
+    MODEL_STRATEGY_FORCE_RESPONSES,
+    DEFAULT_CHAT_MODEL,
+    DEFAULT_MODEL_STRATEGY,
     # responses vs chat
-    CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API,
-    # routing
-    CONF_USE_TOOLS, DEFAULT_USE_TOOLS,
-    CONF_ROUTER_FORCE_TOOLS, CONF_ROUTER_SEARCH_REGEX, CONF_ROUTER_WRITE_REGEX,
-    DEFAULT_ROUTER_FORCE_TOOLS, DEFAULT_ROUTER_SEARCH_REGEX, DEFAULT_ROUTER_WRITE_REGEX,
-    CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION, DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
+    CONF_USE_RESPONSES_API,
+    DEFAULT_USE_RESPONSES_API,
+    # generation
+    CONF_ENABLE_STREAMING,
+    CONF_TEMPERATURE,
+    CONF_TOP_P,
+    CONF_MAX_TOKENS,
+    CONF_MAX_COMPLETION_TOKENS,
+    DEFAULT_ENABLE_STREAMING,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_TOP_P,
+    DEFAULT_MAX_TOKENS,
     # truncation
-    CONF_CONTEXT_THRESHOLD, CONF_CONTEXT_TRUNCATE_STRATEGY,
-    DEFAULT_CONTEXT_THRESHOLD, DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
-    # persona / formatting
-    CONF_PROMPT, DEFAULT_PROMPT,
-    CONF_ATTACH_USERNAME, DEFAULT_ATTACH_USERNAME,
-    CONF_SPEAK_CONFIRMATION_FIRST, DEFAULT_SPEAK_CONFIRMATION_FIRST,
-    CONF_STREAM_MIN_CHARS, DEFAULT_STREAM_MIN_CHARS,
-    # budgets (not actively used until memory is on)
-    CONF_BUDGET_PROFILE, CONF_BUDGET_RETRIEVED, CONF_BUDGET_SCRATCHPAD,
-    DEFAULT_BUDGET_PROFILE, DEFAULT_BUDGET_RETRIEVED, DEFAULT_BUDGET_SCRATCHPAD,
-    # proactivity + memory (dormant)
-    CONF_PROACTIVITY_ENABLED, CONF_PROACTIVITY_K, CONF_PROACTIVITY_MIN_SCORE,
-    DEFAULT_PROACTIVITY_ENABLED, DEFAULT_PROACTIVITY_K, DEFAULT_PROACTIVITY_MIN_SCORE,
-    CONF_MEMORY_BASE_URL, CONF_MEMORY_API_KEY, CONF_MEMORY_DEFAULT_NAMESPACE, CONF_MEMORY_SEARCH_PATH, CONF_MEMORY_WRITE_PATH,
+    CONF_CONTEXT_THRESHOLD,
+    CONF_CONTEXT_TRUNCATE_STRATEGY,
+    DEFAULT_CONTEXT_THRESHOLD,
+    DEFAULT_CONTEXT_TRUNCATE_STRATEGY,
+    # persona / UX
+    CONF_PROMPT,
+    DEFAULT_PROMPT,
+    CONF_ATTACH_USERNAME,
+    DEFAULT_ATTACH_USERNAME,
+    CONF_SPEAK_CONFIRMATION_FIRST,
+    DEFAULT_SPEAK_CONFIRMATION_FIRST,
+    CONF_STREAM_MIN_CHARS,
+    DEFAULT_STREAM_MIN_CHARS,
+    # router (scaffolded)
+    CONF_USE_TOOLS,
+    DEFAULT_USE_TOOLS,
+    CONF_ROUTER_FORCE_TOOLS,
+    CONF_ROUTER_SEARCH_REGEX,
+    CONF_ROUTER_WRITE_REGEX,
+    DEFAULT_ROUTER_FORCE_TOOLS,
+    DEFAULT_ROUTER_SEARCH_REGEX,
+    DEFAULT_ROUTER_WRITE_REGEX,
+    CONF_MAX_FUNCTION_CALLS_PER_CONVERSATION,
+    DEFAULT_MAX_FUNCTION_CALLS_PER_CONVERSATION,
+    # budgets (when composer/memory are active)
+    CONF_BUDGET_PROFILE,
+    CONF_BUDGET_RETRIEVED,
+    CONF_BUDGET_SCRATCHPAD,
+    DEFAULT_BUDGET_PROFILE,
+    DEFAULT_BUDGET_RETRIEVED,
+    DEFAULT_BUDGET_SCRATCHPAD,
+    # proactivity/memory placeholders
+    CONF_PROACTIVITY_ENABLED,
+    CONF_PROACTIVITY_K,
+    CONF_PROACTIVITY_MIN_SCORE,
+    DEFAULT_PROACTIVITY_ENABLED,
+    DEFAULT_PROACTIVITY_K,
+    DEFAULT_PROACTIVITY_MIN_SCORE,
+    CONF_MEMORY_BASE_URL,
+    CONF_MEMORY_API_KEY,
+    CONF_MEMORY_DEFAULT_NAMESPACE,
+    CONF_MEMORY_SEARCH_PATH,
+    CONF_MEMORY_WRITE_PATH,
     DEFAULT_MEMORY_DEFAULT_NAMESPACE,
-    # misc
-    CONF_NAME,
     # reasoning
     CONF_REASONING_EFFORT,
 )
+
 from .model_capabilities import ModelCapabilities, detect_model_capabilities
 from .exceptions import TokenLengthExceededError
 from .helpers import is_azure, validate_authentication
-from .openai_support import detect_chat_tools_support, detect_responses_max_tokens_param
+from .openai_support import (
+    detect_chat_tools_support,
+    detect_responses_max_tokens_param,
+)
 from .context_composer import compose_system_sections, estimate_tokens
 from .router import classify_intent
 
 _LOGGER = logging.getLogger(__name__)
 
-# ---------- Response objects that match HA’s Assist expectations ----------
+# ---------- HA conversation result compatibility ----------
 
 class _AgentResponseCompat:
+    """Object with .speech dict + as_dict() to satisfy HA pipeline and tracing."""
     __slots__ = ("speech", "response_type", "language", "data")
-    def __init__(self, text: str, *, response_type: str = "agent", language: Optional[str] = None, data: Optional[dict] = None):
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        response_type: str = "agent",
+        language: Optional[str] = None,
+        data: Optional[dict] = None,
+    ):
         self.speech = {"plain": {"speech": text or "", "extra_data": None}}
         self.response_type = response_type
         self.language = language
@@ -92,9 +155,19 @@ class _AgentResponseCompat:
             "data": self.data,
         }
 
+
 class _ConversationResultCompat:
+    """Object with .response + .continue_conversation + as_dict() to match HA usage."""
     __slots__ = ("response", "language", "conversation_id", "continue_conversation")
-    def __init__(self, response: _AgentResponseCompat, *, language: Optional[str], conversation_id: Optional[str], continue_conversation: bool = False):
+
+    def __init__(
+        self,
+        response: _AgentResponseCompat,
+        *,
+        language: Optional[str],
+        conversation_id: Optional[str],
+        continue_conversation: bool = False,
+    ):
         self.response = response
         self.language = language
         self.conversation_id = conversation_id
@@ -108,8 +181,9 @@ class _ConversationResultCompat:
             "continue_conversation": self.continue_conversation,
         }
 
+
 def _build_result(text: str, *, language: Optional[str], conversation_id: Optional[str]):
-    cont = bool(text.strip().endswith("?"))
+    cont = bool((text or "").strip().endswith("?"))
     return _ConversationResultCompat(
         _AgentResponseCompat(text=text, language=language),
         language=language,
@@ -122,35 +196,56 @@ def _build_result(text: str, *, language: Optional[str], conversation_id: Option
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 DATA_AGENT = "agent"
 
+
 async def async_setup(hass: HomeAssistant, config) -> bool:
     return True
 
+
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Normalize any previous config-entry versions to our target (1)."""
-    target = 1
-    if entry.version == target:
-        return True
-    _LOGGER.info("Migrating %s entry '%s' from v%s to v%s", DOMAIN, entry.title, entry.version, target)
-    try:
-        # Do not alter data/options; just normalize version.
-        hass.config_entries.async_update_entry(entry, data=entry.data, options=entry.options, version=target)
-        _LOGGER.info("Migration complete for '%s'", entry.title)
-        return True
-    except Exception:  # be explicit in logs; let HA show banner if False
-        _LOGGER.exception("Migration failed for '%s'", entry.title)
-        return False
+    """Migrate old config entry data to the current schema using HA's supported API."""
+    _LOGGER.debug(
+        "Migrating %s entry '%s' from %s.%s",
+        DOMAIN, entry.title, entry.version, getattr(entry, "minor_version", 0)
+    )
+
+    # Copy data/options so we can normalize older snapshots
+    data: dict[str, Any] = dict(entry.data or {})
+    options: dict[str, Any] = dict(entry.options or {})
+
+    # If old builds stored API details in options, move them into data
+    for k in (CONF_API_KEY, CONF_BASE_URL, CONF_CHAT_MODEL, CONF_API_VERSION, CONF_ORGANIZATION):
+        if k not in data and k in options:
+            data[k] = options[k]
+
+    # Commit the migration using the supported API
+    hass.config_entries.async_update_entry(
+        entry,
+        data=data,
+        version=CONFIG_ENTRY_VERSION,
+        minor_version=CONFIG_ENTRY_MINOR_VERSION,
+    )
+    _LOGGER.debug(
+        "Migration successful; now at %s.%s",
+        entry.version, getattr(entry, "minor_version", 0)
+    )
+    return True
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api_key = entry.options.get(CONF_API_KEY) or entry.data.get(CONF_API_KEY)
     base_url = entry.options.get(CONF_BASE_URL) or entry.data.get(CONF_BASE_URL)
     api_version = entry.options.get(CONF_API_VERSION) or entry.data.get(CONF_API_VERSION)
     organization = entry.options.get(CONF_ORGANIZATION) or entry.data.get(CONF_ORGANIZATION)
-    skip_auth = entry.options.get(CONF_SKIP_AUTHENTICATION, entry.data.get(CONF_SKIP_AUTHENTICATION, False))
+    skip_auth = False  # keep a live auth check by default
 
     if not skip_auth:
         try:
             await validate_authentication(
-                hass=hass, api_key=api_key, base_url=base_url, api_version=api_version, organization=organization
+                hass=hass,
+                api_key=api_key,
+                base_url=base_url,
+                api_version=api_version,
+                organization=organization,
             )
         except AuthenticationError as err:
             _LOGGER.error("Extended OpenAI Conversation: auth check failed: %s", err)
@@ -160,6 +255,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     conversation.async_set_agent(hass, entry, agent)
     return True
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     conversation.async_unset_agent(hass, entry)
     hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
@@ -168,7 +264,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 # ---------- Router compatibility ----------
 
 def _classify_intent_compat(text: str, opts: dict) -> bool:
-    """Support both new and legacy classify_intent signatures; fallback to regex."""
+    """Support both new and legacy classify_intent signatures; fallback to local regex."""
     try:
         decision = classify_intent(text)  # type: ignore[misc]
         if hasattr(decision, "should_use_tools"):
@@ -190,6 +286,7 @@ def _classify_intent_compat(text: str, opts: dict) -> bool:
             return decision
     except Exception:
         pass
+
     import re
     if opts.get(CONF_ROUTER_FORCE_TOOLS):
         return True
@@ -255,11 +352,11 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         language = getattr(user_input, "language", None)
         conv_id = getattr(user_input, "conversation_id", None)
 
-        # 1) Compose system prompt (memory/retrieval OFF)
+        # 1) Compose system prompt (composer compatibility; memory off)
         try:
             sections = self._compose_sections_compat(
                 opts=opts,
-                retrieved_text="",  # dormant memory
+                retrieved_text="",
                 budget_profile=opts.get(CONF_BUDGET_PROFILE, DEFAULT_BUDGET_PROFILE),
                 budget_scratchpad=opts.get(CONF_BUDGET_SCRATCHPAD, DEFAULT_BUDGET_SCRATCHPAD),
                 budget_retrieved=opts.get(CONF_BUDGET_RETRIEVED, DEFAULT_BUDGET_RETRIEVED),
@@ -272,13 +369,13 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         if extra:
             system_text = (system_text + ("\n\n" if system_text else "") + extra).strip()
 
-        # 2) Messages
+        # 2) Build messages (stateless for now)
         messages = [
             {"role": "system", "content": system_text},
             {"role": "user", "content": user_input.text},
         ]
 
-        # 3) Truncation
+        # 3) Truncation (will matter once we add history)
         try:
             messages = self._apply_truncation(
                 messages,
@@ -288,7 +385,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         except TokenLengthExceededError as err:
             return _build_result(f"Error: {err}", language=language, conversation_id=conv_id)
 
-        # 4) Tool routing decision (future; not enforced now)
+        # 4) Router decision (scaffolded; not used yet)
         _ = _classify_intent_compat(user_input.text or "", opts)
 
         # 5) Choose API path
@@ -298,28 +395,26 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             model, caps, opts.get(CONF_MODEL_STRATEGY, DEFAULT_MODEL_STRATEGY), opts.get(CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API)
         )
 
-        # 6) Common params
+        # 6) Params
         temperature = opts.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)
         top_p = opts.get(CONF_TOP_P, DEFAULT_TOP_P)
         max_tokens = opts.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)
         max_completion_tokens = opts.get(CONF_MAX_COMPLETION_TOKENS, DEFAULT_MAX_TOKENS)
-        # Force non-stream for now to guarantee text
-        stream = False
 
-        # 7) Call model
+        # 7) Call model (Responses non-streaming for reliability)
         try:
             if use_responses:
                 result = await self._call_responses(
                     model=model, messages=messages,
                     max_output_tokens=max_completion_tokens,
-                    temperature=temperature, top_p=top_p, stream=stream,
+                    temperature=temperature, top_p=top_p, stream=False,
                     reasoning_effort=(opts.get(CONF_REASONING_EFFORT) or "").strip().lower(),
                 )
             else:
                 result = await self._call_chat(
                     model=model, messages=messages,
                     max_tokens=max_tokens,
-                    temperature=temperature, top_p=top_p, stream=stream,
+                    temperature=temperature, top_p=top_p, stream=False,
                 )
         except OpenAIError as err:
             return _build_result(f"Error: Model call failed: {err}", language=language, conversation_id=conv_id)
@@ -327,15 +422,13 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             _LOGGER.exception("Unexpected exception during model call")
             return _build_result(f"Error: Unexpected error: {err}", language=language, conversation_id=conv_id)
 
-        text = result.text or ""
-        return _build_result(text, language=language, conversation_id=conv_id)
+        return _build_result(result.text or "", language=language, conversation_id=conv_id)
 
     # ----- helpers -----
 
     def _options(self) -> dict:
         e = self.entry
         return {
-            CONF_NAME: e.data.get(CONF_NAME, "Extended OpenAI Conversation"),
             CONF_BASE_URL: e.options.get(CONF_BASE_URL) or e.data.get(CONF_BASE_URL),
             CONF_CHAT_MODEL: e.options.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL),
             CONF_MODEL_STRATEGY: e.options.get(CONF_MODEL_STRATEGY, DEFAULT_MODEL_STRATEGY),
@@ -383,7 +476,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
 
     def _should_use_responses_api(self, model: str, caps: ModelCapabilities, strategy: str, use_responses_flag: bool) -> bool:
         if (model or "").lower().startswith("gpt-5"):
-            return True  # GPT‑5 → Responses API
+            return True  # GPT-5 → Responses API
         if strategy == MODEL_STRATEGY_FORCE_RESPONSES:
             return caps.supports_responses
         if strategy == MODEL_STRATEGY_FORCE_CHAT:
@@ -408,9 +501,18 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
             self.usage = usage or {}
             self.tool_calls = tool_calls or []
 
-    async def _call_chat(self, *, model: str, messages: list[dict], max_tokens: int, temperature: float, top_p: float, stream: bool) -> "_Result":
+    async def _call_chat(
+        self,
+        *,
+        model: str,
+        messages: list[dict],
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        stream: bool,
+    ) -> "_Result":
         kwargs: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
-        if not model.lower().startswith("gpt-5"):
+        if not (model or "").lower().startswith("gpt-5"):
             kwargs["temperature"] = temperature
             kwargs["top_p"] = top_p
         comp = await self.client.chat.completions.create(**kwargs)
@@ -419,21 +521,36 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         tool_calls = getattr(getattr(choice, "message", None), "tool_calls", None) or []
         return self._Result(text=text, usage=getattr(comp, "usage", None), tool_calls=tool_calls)
 
-    async def _call_responses(self, *, model: str, messages: list[dict], max_output_tokens: int, temperature: float, top_p: float, stream: bool, reasoning_effort: str) -> "_Result":
+    async def _call_responses(
+        self,
+        *,
+        model: str,
+        messages: list[dict],
+        max_output_tokens: int,
+        temperature: float,
+        top_p: float,
+        stream: bool,
+        reasoning_effort: str,
+    ) -> "_Result":
+        # Collapse chat messages into a single string for the Responses API
         input_text = "\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in messages)
+
         params: dict[str, Any] = {"model": model, "input": input_text}
         params[self._responses_max_tokens_param] = max_output_tokens
+
         is_reasoning = (model or "").lower().startswith("gpt-5")
         if not is_reasoning:
             params["temperature"] = temperature
             params["top_p"] = top_p
         if is_reasoning and reasoning_effort in ("low", "medium", "high"):
             params["reasoning"] = {"effort": reasoning_effort}
-        # Force non-streaming until we implement event consumption
+
+        # Force non-streaming until event consumption is implemented
         resp = await self.client.responses.create(**params)
 
         text = getattr(resp, "output_text", None)
         if text is None:
+            # Fallback adapter for SDK variants
             try:
                 from .responses_adapter import responses_to_chat_like  # type: ignore
                 text = (responses_to_chat_like(resp) or {}).get("text", "")
@@ -466,7 +583,7 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         budget_scratchpad: int,
         budget_retrieved: int,
     ):
-        """Try common call orders to support different forks/versions."""
+        """Try common call orders to support different forks/versions of the composer."""
         kw = {
             "budget_profile": budget_profile,
             "budget_scratchpad": budget_scratchpad,
@@ -491,5 +608,5 @@ class OpenAIAgent(conversation.AbstractConversationAgent):
         try:
             return compose_system_sections(opts, retrieved_text)  # type: ignore[misc]
         except Exception as err:
-            _LOGGER.debug("compose_system_sections fallback due to %r; returning minimal prompt", err)
+            _LOGGER.debug("compose_system_sections fallback due to %r; using minimal prompt", err)
             return self._Sections(system=(opts.get(CONF_PROMPT) or ""), content="")
