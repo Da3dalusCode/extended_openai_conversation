@@ -12,6 +12,7 @@ from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
     DOMAIN,
+    CONFIG_ENTRY_VERSION,
     # base
     CONF_BASE_URL,
     CONF_API_VERSION,
@@ -46,7 +47,7 @@ from .const import (
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow."""
-    VERSION = 3
+    VERSION = CONFIG_ENTRY_VERSION
 
     async def async_step_user(self, user_input: Dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}
@@ -113,29 +114,30 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Handle options."""
 
+    # Do NOT assign to self.config_entry (deprecated). We keep a private copy instead.
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+        self._entry = config_entry
 
     async def async_step_init(self, user_input: Dict[str, Any] | None = None) -> FlowResult:
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        opts = self.config_entry.options
-        data = self.config_entry.data
+        opts = self._entry.options
+        data = self._entry.data
 
         schema = vol.Schema(
             {
-                vol.Optional("chat_model", default=opts.get("chat_model", data.get("chat_model", DEFAULT_CHAT_MODEL))): str,
-                vol.Optional("model_strategy", default=opts.get("model_strategy", DEFAULT_MODEL_STRATEGY)): vol.In(
+                vol.Optional(CONF_CHAT_MODEL, default=opts.get(CONF_CHAT_MODEL, data.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL))): str,
+                vol.Optional(CONF_MODEL_STRATEGY, default=opts.get(CONF_MODEL_STRATEGY, DEFAULT_MODEL_STRATEGY)): vol.In(
                     [MODEL_STRATEGY_AUTO, MODEL_STRATEGY_FORCE_CHAT, MODEL_STRATEGY_FORCE_RESPONSES]
                 ),
-                vol.Optional("use_responses_api", default=opts.get("use_responses_api", DEFAULT_USE_RESPONSES_API)): bool,
-                vol.Optional("reasoning_effort", default=opts.get("reasoning_effort", DEFAULT_REASONING_EFFORT)): vol.In(
+                vol.Optional(CONF_USE_RESPONSES_API, default=opts.get(CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API)): bool,
+                vol.Optional(CONF_REASONING_EFFORT, default=opts.get(CONF_REASONING_EFFORT, DEFAULT_REASONING_EFFORT)): vol.In(
                     ["minimal", "low", "medium", "high"]
                 ),
-                vol.Optional("temperature", default=opts.get("temperature", DEFAULT_TEMPERATURE)): vol.Coerce(float),
-                vol.Optional("top_p", default=opts.get("top_p", DEFAULT_TOP_P)): vol.Coerce(float),
-                vol.Optional("max_tokens", default=opts.get("max_tokens", DEFAULT_MAX_TOKENS)): vol.Coerce(int),
+                vol.Optional(CONF_TEMPERATURE, default=opts.get(CONF_TEMPERATURE, DEFAULT_TEMPERATURE)): vol.Coerce(float),
+                vol.Optional(CONF_TOP_P, default=opts.get(CONF_TOP_P, DEFAULT_TOP_P)): vol.Coerce(float),
+                vol.Optional(CONF_MAX_TOKENS, default=opts.get(CONF_MAX_TOKENS, DEFAULT_MAX_TOKENS)): vol.Coerce(int),
                 vol.Optional("prompt", default=opts.get("prompt", DEFAULT_PROMPT)): str,
             }
         )
