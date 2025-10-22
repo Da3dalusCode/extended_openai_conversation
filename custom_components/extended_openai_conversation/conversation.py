@@ -8,10 +8,10 @@ from typing import Any, Optional
 from homeassistant.components.conversation import (
     ConversationEntity,
     ConversationEntityFeature,
-    ConversationInput,
-    agent,
     ChatLog,
 )
+# Import ConversationResult from the agent module (not re-exported by __init__ in HA 2025.10)
+from homeassistant.components.conversation.agent import ConversationResult
 from homeassistant.helpers import intent
 
 from .const import (
@@ -68,8 +68,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         """Optionally warm up anything; nothing to do."""
 
     async def _async_handle_message(
-        self, user_input: ConversationInput, chat_log: ChatLog
-    ) -> agent.ConversationResult:
+        self, user_input: Any, chat_log: ChatLog
+    ) -> ConversationResult:
         """Handle a message from Assist."""
         data = self.entry.data
         options = {**self._default_options(), **self.entry.options}
@@ -84,11 +84,17 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         strategy = options.get(CONF_MODEL_STRATEGY)
 
         # Decide call path
+        # Default: reasoning -> Responses API; non-reasoning -> Chat Completions
         use_responses = (
             (strategy == MODEL_STRATEGY_FORCE_RESPONSES)
             or (strategy == MODEL_STRATEGY_AUTO and caps.is_reasoning)
-            or (strategy == MODEL_STRATEGY_AUTO and options.get(CONF_USE_RESPONSES_API, True) and not caps.is_reasoning)
         )
+        if strategy == MODEL_STRATEGY_FORCE_CHAT:
+            use_responses = False
+        # Optional override: allow responses for non-reasoning if user explicitly enabled it
+        if strategy == MODEL_STRATEGY_AUTO and not caps.is_reasoning:
+            if bool(options.get(CONF_USE_RESPONSES_API, False)):
+                use_responses = True
 
         # Build client
         client = build_async_client(
@@ -126,12 +132,17 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 result = await client.responses.create(**payload)  # type: ignore[arg-type]
                 text = response_text_from_responses_result(result)
                 cont = _should_continue(text)
-                return _ok(text, user_input.language, user_input.conversation_id, cont)
-            except Exception as err:  # convert to intent error
+                return _ok(
+                    text=text,
+                    language=user_input.language,
+                    conversation_id=user_input.conversation_id,
+                    cont=cont,
+                )
+            except Exception as err:
                 _LOGGER.exception("Responses API failure: %s", err)
                 return _err(str(err), user_input.language)
 
-        # Chat Completions path
+        # Chat Completions path (non-reasoning by default)
         messages = []
         if sys_prompt:
             messages.append({"role": "system", "content": sys_prompt})
@@ -139,11 +150,12 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
         kwargs: dict[str, Any] = {"model": model, "messages": messages}
 
-        # Token knobs: for reasoning models, Chat Completions expects max_completion_tokens
+        # Token knobs
         max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
         if max_tokens > 0:
             kwargs["max_completion_tokens" if caps.is_reasoning else "max_tokens"] = max_tokens
 
+        # Sampling only for non-reasoning models
         if caps.accepts_temperature:
             if (t := options.get(CONF_TEMPERATURE)) is not None:
                 kwargs["temperature"] = float(t)
@@ -155,7 +167,12 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
             msg = result.choices[0].message
             text = msg.content or ""
             cont = _should_continue(text)
-            return _ok(text, user_input.language, user_input.conversation_id, cont)
+            return _ok(
+                text=text,
+                language=user_input.language,
+                conversation_id=user_input.conversation_id,
+                cont=cont,
+            )
         except Exception as err:
             _LOGGER.exception("Chat Completions failure: %s", err)
             return _err(str(err), user_input.language)
@@ -166,7 +183,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         return {
             CONF_CHAT_MODEL: self.entry.options.get(CONF_CHAT_MODEL) or self.entry.data.get(CONF_CHAT_MODEL) or "gpt-4o-mini",
             CONF_MODEL_STRATEGY: self.entry.options.get(CONF_MODEL_STRATEGY) or MODEL_STRATEGY_AUTO,
-            CONF_USE_RESPONSES_API: self.entry.options.get(CONF_USE_RESPONSES_API, True),
+            CONF_USE_RESPONSES_API: self.entry.options.get(CONF_USE_RESPONSES_API, False),
             CONF_TEMPERATURE: self.entry.options.get(CONF_TEMPERATURE, 0.4),
             CONF_TOP_P: self.entry.options.get(CONF_TOP_P, 1.0),
             CONF_MAX_TOKENS: self.entry.options.get(CONF_MAX_TOKENS, 300),
@@ -175,20 +192,20 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         }
 
 
-def _ok(text: str, language: Optional[str], conversation_id: Optional[str], cont: bool) -> agent.ConversationResult:
+def _ok(*, text: str, language: Optional[str], conversation_id: Optional[str], cont: bool) -> ConversationResult:
     response = intent.IntentResponse(language=language)
     response.async_set_speech(text or "")
-    return agent.ConversationResult(
+    return ConversationResult(
         conversation_id=conversation_id,
         response=response,
         continue_conversation=cont,
     )
 
 
-def _err(msg: str, language: Optional[str]) -> agent.ConversationResult:
+def _err(msg: str, language: Optional[str]) -> ConversationResult:
     response = intent.IntentResponse(language=language)
     response.async_set_speech(f"Sorry, I had a problem: {msg}")
-    return agent.ConversationResult(
+    return ConversationResult(
         conversation_id=None,
         response=response,
         continue_conversation=False,
