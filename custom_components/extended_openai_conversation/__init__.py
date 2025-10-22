@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.const import Platform
 
-from .const import DOMAIN
+from .const import DOMAIN, CONFIG_ENTRY_VERSION
 
 PLATFORMS = [Platform.CONVERSATION]
 
@@ -37,3 +37,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
 
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old entries if needed."""
+    if entry.version == CONFIG_ENTRY_VERSION:
+        return True
+    # Current data schema is forward compatible; bump version.
+    hass.config_entries.async_update_entry(entry, data={**entry.data}, version=CONFIG_ENTRY_VERSION)
+    return True
