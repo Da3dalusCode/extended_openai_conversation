@@ -1,99 +1,47 @@
 {
-    "config": {
-        "error": {
-            "cannot_connect": "Failed to connect",
-            "invalid_auth": "Invalid authentication",
-            "unknown": "Unexpected error"
-        },
-        "step": {
-            "user": {
-                "data": {
-                    "name": "Name",
-                    "api_key": "API Key",
-                    "base_url": "Base Url",
-                    "api_version": "Api Version",
-                    "organization": "Organization",
-                    "skip_authentication": "Skip Authentication"
-                }
-            }
+  "title": "Extended OpenAI Conversation",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to OpenAI (or compatible)",
+        "description": "Enter your API key. Base URL is optional unless you use Azure/OpenAI-compatible servers.",
+        "data": {
+          "name": "Name",
+          "api_key": "API Key",
+          "base_url": "Base URL",
+          "api_version": "API Version (Azure only)",
+          "organization": "Organization (optional)",
+          "chat_model": "Default model (e.g. gpt-4o-mini)"
         }
-    },
-    "options": {
-        "step": {
-            "init": {
-                "data": {
-                    "max_tokens": "Maximum tokens to return in response",
-                    "model": "Completion Model",
-                    "prompt": "Prompt Template",
-                    "temperature": "Temperature",
-                    "top_p": "Top P",
-                    "max_function_calls_per_conversation": "Maximum function calls per conversation",
-                    "functions": "Functions",
-                    "attach_username": "Attach Username to Message",
-                    "use_tools": "Use Tools",
-                    "use_responses_api": "Use Responses API",
-                    "model_strategy": "Model strategy",
-                    "reasoning_effort": "Reasoning effort",
-                    "max_completion_tokens": "Max completion tokens",
-                    "context_threshold": "Context Threshold",
-                    "context_truncate_strategy": "Context truncation strategy when exceeded threshold",
-                    "enable_streaming": "Enable streaming",
-                    "stream_min_chars": "Streaming minimum characters",
-                    "speak_confirmation_first": "Speak confirmation first",
-                    "proactivity_enabled": "Enable proactive memory search",
-                    "proactivity_k": "Proactive results (k)",
-                    "proactivity_min_score": "Proactive minimum score",
-                    "budget_profile": "Profile digest token budget",
-                    "budget_scratchpad": "Scratchpad token budget",
-                    "budget_retrieved": "Retrieved memory token budget",
-                    "memory_base_url": "Memory service base URL",
-          "memory_api_key": "Memory service API key",
-          "memory_default_namespace": "Default memory namespace",
-          "memory_write_path": "Memory service write path",
-          "memory_search_path": "Memory service search path",
-          "router_force_tools": "Force router tool choice",
-                    "router_write_regex": "Router pattern: write",
-                    "router_search_regex": "Router pattern: search",
-                    "dry_run": "Dry run (log only)"
-                },
-                "data_description": {
-                    "speak_confirmation_first": {
-                        "help": "Speak a 1-sentence ack before the full streamed answer when saving memory."
-                    }
-                }
-            }
+      },
+      "reconfigure": {
+        "title": "Update credentials",
+        "data": {
+          "name": "Name",
+          "api_key": "API Key",
+          "base_url": "Base URL",
+          "api_version": "API Version (Azure only)",
+          "organization": "Organization (optional)",
+          "chat_model": "Default model (e.g. gpt-4o-mini)"
         }
-    },
-    "services": {
-        "query_image": {
-            "name": "Query image",
-            "description": "Take in images and answer questions about them",
-            "fields": {
-                "config_entry": {
-                    "name": "Config Entry",
-                    "description": "The config entry to use for this service"
-                },
-                "model": {
-                    "name": "Model",
-                    "description": "The model",
-                    "example": "gpt-4-vision-preview"
-                },
-                "prompt": {
-                    "name": "Prompt",
-                    "description": "The text to ask about image",
-                    "example": "What’s in this image?"
-                },
-                "images": {
-                    "name": "Images",
-                    "description": "A list of images that would be asked",
-                    "example": "{\"url\": \"https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg\"}"
-                },
-                "max_tokens": {
-                    "name": "Max Tokens",
-                    "description": "The maximum tokens",
-                    "example": "300"
-                }
-            }
-        }
+      }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Assistant behavior",
+        "data": {
+          "chat_model": "Model",
+          "model_strategy": "API strategy",
+          "use_responses_api": "Use Responses API when possible",
+          "reasoning_effort": "Reasoning effort (reasoning models)",
+          "temperature": "Temperature (non-reasoning only)",
+          "top_p": "Top‑p (non‑reasoning only)",
+          "max_tokens": "Max output tokens",
+          "prompt": "System prompt (optional)"
+        }
+      }
+    }
+  }
 }
