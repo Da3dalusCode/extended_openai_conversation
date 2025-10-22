@@ -1,52 +1,37 @@
-"""Model capability heuristics for routing requests."""
+"""Detect model capabilities (reasoning vs non-reasoning) and token knobs."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 
-_REASONING_PATTERN = re.compile(r"(gpt-5.*thinking|o[0-9])", re.IGNORECASE)
-
+REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+REASONING_MODELS_EXPLICIT = {
+    # keep list for models without clear prefix patterns
+    "gpt-4.1-reasoning",
+}
 
 @dataclass(frozen=True)
 class ModelCapabilities:
-    """Heuristic capabilities detected for a given model identifier."""
-
-    supports_responses: bool
-    supports_chat: bool
-    supports_reasoning: bool
-    supports_streaming: bool
-    prefers_responses: bool
+    is_reasoning: bool
+    accepts_temperature: bool
+    chat_max_tokens_param: str  # "max_tokens" or "max_completion_tokens"
+    responses_max_tokens_param: str  # almost always "max_output_tokens"
 
 
 def detect_model_capabilities(model: str | None) -> ModelCapabilities:
-    """Return inferred capabilities for ``model`` using lightweight heuristics."""
+    name = (model or "").lower()
+    is_reasoning = any(name.startswith(p) for p in REASONING_PREFIXES) or name in REASONING_MODELS_EXPLICIT
 
-    if not model:
-        return ModelCapabilities(
-            supports_responses=True,
-            supports_chat=True,
-            supports_reasoning=False,
-            supports_streaming=True,
-            prefers_responses=False,
-        )
+    # Reasoning models generally reject temperature/top_p.
+    accepts_temperature = not is_reasoning
 
-    identifier = model.lower()
-    supports_reasoning = bool(_REASONING_PATTERN.search(identifier))
-
-    # Assume modern models support both APIs and streaming by default; callers may
-    # still override strategy or feature flags explicitly via options.
-    supports_responses = True
-    supports_chat = True
-    supports_streaming = True
-
-    prefers_responses = supports_reasoning
+    chat_max_param = "max_completion_tokens" if is_reasoning else "max_tokens"
+    responses_max_param = "max_output_tokens"
 
     return ModelCapabilities(
-        supports_responses=supports_responses,
-        supports_chat=supports_chat,
-        supports_reasoning=supports_reasoning,
-        supports_streaming=supports_streaming,
-        prefers_responses=prefers_responses,
+        is_reasoning=is_reasoning,
+        accepts_temperature=accepts_temperature,
+        chat_max_tokens_param=chat_max_param,
+        responses_max_tokens_param=responses_max_param,
     )
