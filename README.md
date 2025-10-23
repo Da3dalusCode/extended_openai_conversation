@@ -36,7 +36,7 @@ Developer Tools → **Services** → `conversation.process`
 ### First-screen (Config Flow)
 - **Name**: Integration title shown in HA
 - **API Key** *(required)*
-- **Base URL** *(optional; default `https://api.openai.com/v1`)*  
+- **Base URL** *(optional; default `https://api.openai.com/v1`)*
 - **API Version / Organization** *(optional; for Azure or org scoping)*
 - **Default Model** *(used initially; change later in Options)*
 
@@ -57,7 +57,7 @@ Developer Tools → **Services** → `conversation.process`
 
 ## How it works (routing)
 - **Reasoning models** (e.g., GPT-5 family, o-series):  
-  Calls **Responses API**, adds `reasoning: {effort}`, uses `max_output_tokens`, **omits** sampling params.
+  Calls **Responses API**, adds `reasoning: { effort }`, uses `max_output_tokens`, **omits** sampling params.
 - **Non-reasoning models** (e.g., `gpt-4o-mini`):  
   Calls **Chat Completions**, uses `max_tokens` and standard sampling.
 
@@ -91,14 +91,15 @@ The conversation entity returns a **ConversationResult** with `intent.IntentResp
   Check logs; verify your agent is the pipeline’s **Conversation agent** and that your API key is valid.
 
 Enable debug for more detail:
-```yaml
+~~~yaml
 logger:
   logs:
     custom_components.extended_openai_conversation: debug
+~~~
 
 ---
 
 ## Credits
 
--Upstream: jekalmin/extended_openai_conversation
--This fork: reasoning-model support, Responses API path, Assist compatibility updates.
+- Upstream: [jekalmin/extended_openai_conversation](https://github.com/jekalmin/extended_openai_conversation)  
+- This fork: reasoning-model support, Responses API path, Assist compatibility updates.
