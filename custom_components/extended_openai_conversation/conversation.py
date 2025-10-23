@@ -3,16 +3,31 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 
 from homeassistant.components.conversation import (
     ConversationEntity,
     ConversationEntityFeature,
     ChatLog,
 )
-# Import ConversationResult from the agent module (not re-exported by __init__ in HA 2025.10)
-from homeassistant.components.conversation.agent import ConversationResult
 from homeassistant.helpers import intent
+
+# ---- Robust import of ConversationResult across HA versions ----
+# Some HA versions don't expose `conversation.agent` as an importable module.
+# We fall back to a small shim with the attributes HA uses.
+try:  # HA ≥ some 2025 builds
+    from homeassistant.components.conversation.agent import ConversationResult  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    try:  # older pattern where `agent` is re-exported
+        from homeassistant.components.conversation import agent as _agent_mod  # type: ignore[attr-defined]
+        ConversationResult = _agent_mod.ConversationResult  # type: ignore[assignment]
+    except Exception:  # last-resort duck-typed shim
+        class ConversationResult:  # type: ignore[misc]
+            def __init__(self, *, conversation_id, response, continue_conversation):
+                self.conversation_id = conversation_id
+                self.response = response
+                self.continue_conversation = continue_conversation
+# ----------------------------------------------------------------
 
 from .const import (
     DOMAIN,
@@ -29,6 +44,7 @@ from .const import (
     CONF_REASONING_EFFORT,
     DEFAULT_PROMPT,
     DEFAULT_MAX_TOKENS,
+    DEFAULT_USE_RESPONSES_API,
     MODEL_STRATEGY_AUTO,
     MODEL_STRATEGY_FORCE_CHAT,
     MODEL_STRATEGY_FORCE_RESPONSES,
@@ -50,7 +66,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
     _attr_has_entity_name = True
     _attr_name = "Extended OpenAI Conversation"
     _attr_supported_features = ConversationEntityFeature.CONTROL
-    _attr_supported_languages = "*"  # support all
+    _attr_supported_languages = "*"  # support all languages
 
     def __init__(self, hass, entry) -> None:
         self.hass = hass
@@ -65,12 +81,12 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         return self.entry.title or "Extended OpenAI Conversation"
 
     async def async_prepare(self, language: str | None = None) -> None:
-        """Optionally warm up anything; nothing to do."""
+        """Optional prefetch/warm-up."""
 
     async def _async_handle_message(
         self, user_input: Any, chat_log: ChatLog
     ) -> ConversationResult:
-        """Handle a message from Assist."""
+        """Handle a message from Assist (HA calls this)."""
         data = self.entry.data
         options = {**self._default_options(), **self.entry.options}
 
@@ -83,20 +99,24 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         caps = detect_model_capabilities(model)
         strategy = options.get(CONF_MODEL_STRATEGY)
 
-        # Decide call path
-        # Default: reasoning -> Responses API; non-reasoning -> Chat Completions
+        # Decide call path:
+        # - reasoning models -> Responses API (unless FORCE_CHAT)
+        # - non-reasoning -> Chat Completions by default
         use_responses = (
             (strategy == MODEL_STRATEGY_FORCE_RESPONSES)
             or (strategy == MODEL_STRATEGY_AUTO and caps.is_reasoning)
         )
         if strategy == MODEL_STRATEGY_FORCE_CHAT:
             use_responses = False
-        # Optional override: allow responses for non-reasoning if user explicitly enabled it
         if strategy == MODEL_STRATEGY_AUTO and not caps.is_reasoning:
-            if bool(options.get(CONF_USE_RESPONSES_API, False)):
+            if bool(options.get(CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API)):
                 use_responses = True
 
-        # Build client
+        _LOGGER.debug(
+            "EOC: model=%s caps=%s strategy=%s use_responses=%s",
+            model, caps, strategy, use_responses
+        )
+
         client = build_async_client(
             self.hass,
             api_key=api_key,
@@ -105,12 +125,11 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
             organization=organization,
         )
 
-        # Compose messages
         sys_prompt = (options.get("prompt") or DEFAULT_PROMPT).strip()
         user_text = user_input.text
 
         if use_responses:
-            # Responses API path; never send temperature/top_p with reasoning models.
+            # Responses API: do not send sampling params to reasoning models.
             payload: dict[str, Any] = {
                 "model": model,
                 "input": [
@@ -118,7 +137,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                     {"role": "user", "content": [{"type": "text", "text": user_text}]},
                 ],
             }
-            payload["input"] = [x for x in payload["input"] if x]  # drop Nones
+            payload["input"] = [x for x in payload["input"] if x]
 
             max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
             if max_tokens > 0:
@@ -142,7 +161,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 _LOGGER.exception("Responses API failure: %s", err)
                 return _err(str(err), user_input.language)
 
-        # Chat Completions path (non-reasoning by default)
+        # Chat Completions path (default for non-reasoning)
         messages = []
         if sys_prompt:
             messages.append({"role": "system", "content": sys_prompt})
@@ -150,12 +169,10 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
         kwargs: dict[str, Any] = {"model": model, "messages": messages}
 
-        # Token knobs
         max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
         if max_tokens > 0:
             kwargs["max_completion_tokens" if caps.is_reasoning else "max_tokens"] = max_tokens
 
-        # Sampling only for non-reasoning models
         if caps.accepts_temperature:
             if (t := options.get(CONF_TEMPERATURE)) is not None:
                 kwargs["temperature"] = float(t)
@@ -183,7 +200,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         return {
             CONF_CHAT_MODEL: self.entry.options.get(CONF_CHAT_MODEL) or self.entry.data.get(CONF_CHAT_MODEL) or "gpt-4o-mini",
             CONF_MODEL_STRATEGY: self.entry.options.get(CONF_MODEL_STRATEGY) or MODEL_STRATEGY_AUTO,
-            CONF_USE_RESPONSES_API: self.entry.options.get(CONF_USE_RESPONSES_API, False),
+            CONF_USE_RESPONSES_API: self.entry.options.get(CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API),
             CONF_TEMPERATURE: self.entry.options.get(CONF_TEMPERATURE, 0.4),
             CONF_TOP_P: self.entry.options.get(CONF_TOP_P, 1.0),
             CONF_MAX_TOKENS: self.entry.options.get(CONF_MAX_TOKENS, 300),
