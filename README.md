@@ -1,73 +1,104 @@
 # Extended OpenAI Conversation (EOC)
-Reasoning-enabled fork of the upstream **Extended OpenAI Conversation** custom integration for Home Assistant.
 
-- Works with **current Home Assistant (2025.x)** and **OpenAI Python SDK 1.x**
-- Adds **Responses API** path for **reasoning-class models** (e.g., GPT-5 / o-series).  
-  - Sends `reasoning: { effort: minimal/low/medium/high }` for reasoning models  
-  - **Does not** send `temperature`/`top_p` to reasoning models  
-- Uses **Chat Completions** path for non-reasoning models (where `temperature`/`top_p` apply)
-- Clean **HACS → Restart → Add Integration** flow (first screen = API key)
-- Integrates with **Assist** pipelines; returns the correct **ConversationResult** with `continue_conversation`
-- **Memory/RAG scaffolding** remains present but **OFF by default**
+A maintained fork of **Extended OpenAI Conversation** for Home Assistant that:
+- Works with current Home Assistant (tested on 2025.10.x).
+- Uses **OpenAI Python SDK 1.x**.
+- Adds first-class support for **OpenAI “reasoning-class” models** via the **Responses API** (e.g., GPT-5 family, o-series).  
+  - Automatically sends `reasoning: { effort: ... }` to reasoning models.
+  - **Does not** send `temperature`/`top_p` to reasoning models (they reject it).
+- Keeps **memory/RAG scaffolding present but OFF by default**.
+- Integrates cleanly with **Assist pipelines** (voice & text), returning the correct **ConversationResult** with `continue_conversation`.
 
-> Upstream reference: https://github.com/jekalmin/extended_openai_conversation  
-> This fork keeps the familiar UX but updates internals for modern OpenAI models.
+> Upstream: https://github.com/jekalmin/extended_openai_conversation
 
 ---
 
 ## Installation (HACS)
-1. In **HACS → Integrations → ⋮ → Custom repositories**, add  
-   `https://github.com/Da3dalusCode/extended_openai_conversation` (Category: Integration).
-2. Install **Extended OpenAI Conversation**.
-3. **Restart Home Assistant**.
-4. Go to **Settings → Devices & Services → Add Integration → Extended OpenAI Conversation**.
-5. **Enter your OpenAI API key** (and **Base URL**/**API Version** if using Azure/OpenAI-compatible endpoints).
-6. After setup completes, open the integration **Options** to fine-tune model behavior.
-7. (Optional) In **Settings → Voice Assistants**, set your assistant’s **Conversation agent** to this integration.
 
-> If you’re using Azure OpenAI, set **Base URL** to your Azure endpoint and **API Version** (e.g., `2024-12-01-preview`). The **model** value should be your **deployment name**.
+1. In HACS, **Add custom repository**: `Da3dalusCode/extended_openai_conversation` (Integration).
+2. Install the integration.
+3. **Restart Home Assistant.**
+4. Go to **Settings → Devices & Services → Add Integration → Extended OpenAI Conversation**.
+5. On the first screen, enter your **OpenAI API key**.  
+   - Set **Base URL** only if using an OpenAI-compatible endpoint (Azure/OpenAI-compatible, LocalAI, etc.).
+6. After the integration is created, open **Options** to configure model/strategy.
+
+### Quick test
+Developer Tools → **Services** → `conversation.process`  
+- `agent_id`: your EOC agent entity (e.g., `conversation.extended_openai_conversation`)  
+- `text`: “What’s the weather like?”  
+- Optional: set `conversation_id` to keep a thread.
 
 ---
 
-## Options (recommended)
-- **Model**: e.g., `gpt-4o-mini` (fast non-reasoning), `o3-mini` / `gpt-5-*` (reasoning).
-- **API strategy**:  
-  - `auto` → reasoning models go **Responses API**; others use **Chat Completions**  
-  - `force_chat` → always use **Chat Completions**  
-  - `force_responses` → always use **Responses API**
-- **Reasoning effort**: `minimal | low | medium | high` (used only for reasoning-class models)
-- **Temperature / Top-p**: **ignored** for reasoning; used on non-reasoning models
-- **Max output tokens**: automatically mapped to the correct field:
-  - **Responses** → `max_output_tokens`
-  - **Chat Completions (reasoning)** → `max_completion_tokens`
-  - **Chat Completions (non-reasoning)** → `max_tokens`
-- **System prompt**: optional persona/instructions (memory is scaffolded but off by default)
+## Configuration
+
+### First-screen (Config Flow)
+- **Name**: Integration title shown in HA
+- **API Key** *(required)*
+- **Base URL** *(optional; default `https://api.openai.com/v1`)*  
+- **API Version / Organization** *(optional; for Azure or org scoping)*
+- **Default Model** *(used initially; change later in Options)*
+
+### Options (after install)
+- **Model**: e.g., `gpt-4o-mini`, `gpt-5`, `o3-mini`
+- **API strategy**:
+  - `auto` (default): reasoning models → Responses API; others → Chat Completions
+  - `force_chat`: always use Chat Completions
+  - `force_responses`: always use Responses API
+- **Reasoning effort**: minimal / low / medium / high (applies to reasoning models)
+- **Temperature / Top-p**: only for non-reasoning models
+- **Max output tokens**
+- **System prompt**: optional system instructions
+
+> **Tip:** If you want the default model to be a reasoning model (e.g., `gpt-5`), you can set it during setup or later in Options.
+
+---
+
+## How it works (routing)
+- **Reasoning models** (e.g., GPT-5 family, o-series):  
+  Calls **Responses API**, adds `reasoning: {effort}`, uses `max_output_tokens`, **omits** sampling params.
+- **Non-reasoning models** (e.g., `gpt-4o-mini`):  
+  Calls **Chat Completions**, uses `max_tokens` and standard sampling.
+
+The conversation entity returns a **ConversationResult** with `intent.IntentResponse` so Assist speaks the reply and honors `continue_conversation`.
+
+---
+
+## Compatibility
+
+- **Home Assistant**: 2024.10+ (tested on 2025.10.x)
+- **OpenAI Python SDK**: `>=1.0.0,<2.0.0`
+- **Endpoints**: OpenAI-hosted and Azure OpenAI-compatible
+
+---
+
+## Privacy & Security
+
+- Your prompts go only to the configured endpoint (OpenAI or compatible).
+- Don’t include secrets in prompts. Prefer network segmentation or environment isolation where appropriate.
+- Memory/RAG scaffolding exists but is **off** in this release (no extra calls unless you wire them up).
 
 ---
 
 ## Troubleshooting
-- **“Failed to set up” with `cannot import name 'agent'`**  
-  Fixed in **v1.3.1** by importing `ConversationResult` from the correct module path.
-- **Benign warning**: “blocking call to `import_module`… inside the event loop” – this comes from HA’s platform importer and is not fatal.
-- **Enable debug logs**
-  ```yaml
-  # configuration.yaml
-  logger:
-    logs:
-      custom_components.extended_openai_conversation: debug
-- **Test quickly:** Developer Tools → Services → `conversation.process` → set `agent_id` to this integration’s entity.
 
-## Privacy & Security
-- Your prompts go to the configured endpoint (OpenAI or compatible).
-- Don’t include secrets in prompts. Use network segmentation/environment isolation where appropriate.
-- Memory/RAG endpoints exist in scaffolding but are **off** in this release.
+- **“Failed to set up” right after adding**:  
+  Ensure you’re on the latest release. We include a compatibility shim for HA’s conversation API import differences. A restart is required after updating.
+- **Reasoning model rejects temperature/top_p**:  
+  Expected—those params are not sent on the reasoning path.
+- **Assist bubble shows intent-failed**:  
+  Check logs; verify your agent is the pipeline’s **Conversation agent** and that your API key is valid.
 
-## Compatibility
-- Home Assistant **2024.10+** (tested on **2025.10.x**)
-- OpenAI Python SDK **≥ 1.0.0 < 2.0.0**
-- Supports OpenAI-hosted and Azure OpenAI-compatible endpoints.
+Enable debug for more detail:
+```yaml
+logger:
+  logs:
+    custom_components.extended_openai_conversation: debug
+
+---
 
 ## Credits
-- Upstream: **jekalmin/extended_openai_conversation**
-- This fork: reasoning-model support, Responses API path, Assist compatibility updates.
 
+-Upstream: jekalmin/extended_openai_conversation
+-This fork: reasoning-model support, Responses API path, Assist compatibility updates.
