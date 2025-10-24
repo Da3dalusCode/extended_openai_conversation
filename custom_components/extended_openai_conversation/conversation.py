@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional, Literal
 
 from homeassistant.components.conversation import (
     ConversationEntity,
@@ -12,13 +12,11 @@ from homeassistant.components.conversation import (
 )
 from homeassistant.helpers import intent
 
-# ---- Robust import of ConversationResult across HA versions ----
-# Some HA versions don't expose `conversation.agent` as an importable module.
-# We fall back to a small shim with the attributes HA uses.
-try:  # HA ≥ some 2025 builds
+# ---- Robust import: ConversationResult path varies across HA versions ----
+try:
     from homeassistant.components.conversation.agent import ConversationResult  # type: ignore[attr-defined]
 except Exception:  # pragma: no cover
-    try:  # older pattern where `agent` is re-exported
+    try:
         from homeassistant.components.conversation import agent as _agent_mod  # type: ignore[attr-defined]
         ConversationResult = _agent_mod.ConversationResult  # type: ignore[assignment]
     except Exception:  # last-resort duck-typed shim
@@ -27,7 +25,7 @@ except Exception:  # pragma: no cover
                 self.conversation_id = conversation_id
                 self.response = response
                 self.continue_conversation = continue_conversation
-# ----------------------------------------------------------------
+# -------------------------------------------------------------------------
 
 from .const import (
     DOMAIN,
@@ -66,11 +64,17 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
     _attr_has_entity_name = True
     _attr_name = "Extended OpenAI Conversation"
     _attr_supported_features = ConversationEntityFeature.CONTROL
-    _attr_supported_languages = "*"  # support all languages
 
     def __init__(self, hass, entry) -> None:
         self.hass = hass
         self.entry = entry
+
+    # ---- Required abstract properties ----
+    @property
+    def supported_languages(self) -> list[str] | Literal["*"]:
+        """We support all languages provided by upstream STT/TTS/Assist."""
+        return "*"
+    # -------------------------------------
 
     @property
     def unique_id(self) -> Optional[str]:
@@ -113,7 +117,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 use_responses = True
 
         _LOGGER.debug(
-            "EOC: model=%s caps=%s strategy=%s use_responses=%s",
+            "EOC setup: model=%s caps=%s strategy=%s use_responses=%s",
             model, caps, strategy, use_responses
         )
 
