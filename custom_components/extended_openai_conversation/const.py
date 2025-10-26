@@ -30,6 +30,14 @@ CONF_MAX_TOKENS = "max_tokens"
 # Optional scaffolding (off by default)
 CONF_MEMORY_ENABLED = "memory_enabled"
 CONF_MEMORY_DEFAULT_NAMESPACE = "memory_default_namespace"
+CONF_FUNCTIONS_YAML = "functions"
+CONF_ENABLE_WEB_SEARCH = "enable_web_search"
+CONF_SEARCH_CONTEXT_SIZE = "search_context_size"
+CONF_INCLUDE_HOME_LOCATION = "include_home_location"
+CONF_MAX_TOOL_CALLS = "max_tool_calls"
+CONF_ENABLE_MCP = "enable_mcp_tools"
+CONF_MCP_TIMEOUT = "mcp_timeout"
+CONF_MCP_MAX_PAYLOAD = "mcp_max_payload"
 
 # Optional service
 SERVICE_QUERY_IMAGE = "query_image"
@@ -47,3 +55,10 @@ DEFAULT_MAX_TOKENS = 300
 DEFAULT_PROMPT = ""
 DEFAULT_MEMORY_ENABLED = False
 DEFAULT_MEMORY_DEFAULT_NAMESPACE = "default"
+DEFAULT_ENABLE_WEB_SEARCH = False
+DEFAULT_SEARCH_CONTEXT_SIZE = 8
+DEFAULT_INCLUDE_HOME_LOCATION = False
+DEFAULT_MAX_TOOL_CALLS = 4
+DEFAULT_ENABLE_MCP = False
+DEFAULT_MCP_TIMEOUT = 20
+DEFAULT_MCP_MAX_PAYLOAD = 16384

@@ -27,6 +27,9 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_functions_yaml": "Functions YAML must be a valid list or mapping."
+    },
     "step": {
       "init": {
         "title": "EOC Options",
@@ -38,6 +41,14 @@
           "temperature": "Temperature (chat models only)",
           "top_p": "Top‑p (chat models only)",
           "max_tokens": "Max tokens",
+          "enable_web_search": "Enable hosted web search (Responses API)",
+          "search_context_size": "Web search context size",
+          "include_home_location": "Include approximate home location",
+          "max_tool_calls": "Max tool calls per turn",
+          "enable_mcp_tools": "Enable MCP tools",
+          "mcp_timeout": "MCP tool timeout (seconds)",
+          "mcp_max_payload": "MCP max payload (bytes)",
+          "functions": "Functions (YAML configuration)",
           "prompt": "System prompt"
         }
       }
