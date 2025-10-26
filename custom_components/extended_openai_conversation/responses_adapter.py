@@ -1,4 +1,4 @@
-"""Small helpers to work with the OpenAI Responses API results."""
+"""Helpers to extract text from OpenAI Responses API results."""
 
 from __future__ import annotations
 
@@ -6,22 +6,50 @@ from typing import Any
 
 
 def response_text_from_responses_result(result: Any) -> str:
-    """Extract the plain text from a responses.create() result."""
-    # openai>=1.0 exposes a convenience property
+    """
+    Return best-effort text from a Responses API result (OpenAI 1.x).
+
+    Priority:
+      1) result.output_text if provided by the SDK
+      2) Traverse result.output[*].content[*].text where type == "output_text"
+      3) Fallback to first string in a model_dump()/to_dict() structure
+    """
+    # 1) Direct convenience property (many SDK builds expose this)
     text = getattr(result, "output_text", None)
-    if isinstance(text, str) and text:
+    if isinstance(text, str) and text.strip():
         return text
 
-    # fallback: scan output choices
-    try:
-        output = getattr(result, "output", []) or []
-        for item in output:
-            if isinstance(item, dict):
-                content = item.get("content") or []
-                for c in content:
-                    if c.get("type") == "output_text" and "text" in c:
-                        return c["text"] or ""
-    except Exception:
-        pass
-    return ""
+    # 2) Walk the object attributes if available
+    output = getattr(result, "output", None)
+    if output:
+        try:
+            for item in output:  # items with role, content
+                content = getattr(item, "content", None) or item.get("content")  # type: ignore[union-attr]
+                if not content:
+                    continue
+                for part in content:
+                    ptype = getattr(part, "type", None) or part.get("type")  # type: ignore[union-attr]
+                    if ptype == "output_text":
+                        txt = getattr(part, "text", None) or part.get("text")  # type: ignore[union-attr]
+                        if isinstance(txt, str) and txt.strip():
+                            return txt
+        except Exception:
+            pass
 
+    # 3) Fallback: try dict conversion
+    to_dict = getattr(result, "to_dict", None) or getattr(result, "model_dump", None)
+    if callable(to_dict):
+        try:
+            data = to_dict()
+            # naive scan
+            if isinstance(data, dict):
+                out = data.get("output")
+                if isinstance(out, list):
+                    for item in out:
+                        for part in (item.get("content") or []):
+                            if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                                return part["text"]
+        except Exception:
+            pass
+
+    return ""
