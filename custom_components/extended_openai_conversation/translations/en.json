@@ -3,26 +3,25 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to OpenAI (or compatible)",
-        "description": "Enter your API key. Base URL is optional unless you use Azure/OpenAI-compatible servers.",
+        "title": "Connect to OpenAI",
         "data": {
+          "api_key": "API key",
+          "chat_model": "Default model",
           "name": "Name",
-          "api_key": "API Key",
-          "base_url": "Base URL",
-          "api_version": "API Version (Azure only)",
+          "base_url": "Base URL (optional)",
           "organization": "Organization (optional)",
-          "chat_model": "Default model (e.g. gpt-4o-mini)"
+          "api_version": "API version (Azure only)"
         }
       },
       "reconfigure": {
         "title": "Update credentials",
         "data": {
+          "api_key": "API key",
+          "chat_model": "Default model",
           "name": "Name",
-          "api_key": "API Key",
-          "base_url": "Base URL",
-          "api_version": "API Version (Azure only)",
+          "base_url": "Base URL (optional)",
           "organization": "Organization (optional)",
-          "chat_model": "Default model (e.g. gpt-4o-mini)"
+          "api_version": "API version (Azure only)"
         }
       }
     }
@@ -30,16 +29,16 @@
   "options": {
     "step": {
       "init": {
-        "title": "Assistant behavior",
+        "title": "EOC Options",
         "data": {
           "chat_model": "Model",
-          "model_strategy": "API strategy",
-          "use_responses_api": "Use Responses API when possible",
-          "reasoning_effort": "Reasoning effort (reasoning models)",
-          "temperature": "Temperature (non-reasoning only)",
-          "top_p": "Top‑p (non‑reasoning only)",
-          "max_tokens": "Max output tokens",
-          "prompt": "System prompt (optional)"
+          "model_strategy": "Model strategy",
+          "use_responses_api": "Use Responses API (non‑reasoning models)",
+          "reasoning_effort": "Reasoning effort",
+          "temperature": "Temperature (chat models only)",
+          "top_p": "Top‑p (chat models only)",
+          "max_tokens": "Max tokens",
+          "prompt": "System prompt"
         }
       }
     }
