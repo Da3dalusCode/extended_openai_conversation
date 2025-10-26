@@ -11,6 +11,7 @@ from homeassistant.components.conversation import (
     ChatLog,
 )
 from homeassistant.helpers import intent
+from homeassistant.const import CONF_API_KEY  # canonical key from HA
 
 # ---- Robust import: ConversationResult path varies across HA versions ----
 try:
@@ -29,7 +30,6 @@ except Exception:  # pragma: no cover
 
 from .const import (
     DOMAIN,
-    CONF_API_KEY,
     CONF_BASE_URL,
     CONF_API_VERSION,
     CONF_ORGANIZATION,
@@ -47,7 +47,7 @@ from .const import (
     MODEL_STRATEGY_FORCE_CHAT,
     MODEL_STRATEGY_FORCE_RESPONSES,
 )
-# IMPORTANT: Do NOT import openai_support at module scope; we import inside the handler.
+# IMPORTANT: Do NOT import openai_support at module scope; import inside handler.
 from .model_capabilities import detect_model_capabilities
 from .responses_adapter import response_text_from_responses_result
 
@@ -69,12 +69,10 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         self.hass = hass
         self.entry = entry
 
-    # ---- Required abstract properties ----
+    # Required by your HA build
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
-        """We support all languages provided by upstream STT/TTS/Assist."""
         return "*"
-    # -------------------------------------
 
     @property
     def unique_id(self) -> Optional[str]:
@@ -90,7 +88,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
     async def _async_handle_message(
         self, user_input: Any, chat_log: ChatLog
     ) -> ConversationResult:
-        """Handle a message from Assist (HA calls this)."""
+        """Handle a message from Assist."""
         # Lazy import here avoids importing the OpenAI SDK during platform import.
         from .openai_support import build_async_client  # local import by design
 
@@ -136,7 +134,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         user_text = user_input.text
 
         if use_responses:
-            # Responses API: do not send sampling params to reasoning models.
+            # Responses API: no sampling params for reasoning models.
             payload: dict[str, Any] = {
                 "model": model,
                 "input": [
@@ -205,7 +203,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
     def _default_options(self) -> dict[str, Any]:
         return {
-            CONF_CHAT_MODEL: self.entry.options.get(CONF_CHAT_MODEL) or self.entry.data.get(CONF_CHAT_MODEL) or "gpt-4o-mini",
+            CONF_CHAT_MODEL: self.entry.options.get(CONF_CHAT_MODEL) or self.entry.data.get(CONF_CHAT_MODEL) or "gpt-5",
             CONF_MODEL_STRATEGY: self.entry.options.get(CONF_MODEL_STRATEGY) or MODEL_STRATEGY_AUTO,
             CONF_USE_RESPONSES_API: self.entry.options.get(CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API),
             CONF_TEMPERATURE: self.entry.options.get(CONF_TEMPERATURE, 0.4),
