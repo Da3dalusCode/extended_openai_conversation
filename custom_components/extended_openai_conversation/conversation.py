@@ -11,22 +11,31 @@ from homeassistant.components.conversation import (
     ChatLog,
 )
 from homeassistant.helpers import intent
-from homeassistant.const import CONF_API_KEY  # canonical key from HA
+from homeassistant.const import CONF_API_KEY
 
-# ---- Robust import: ConversationResult path varies across HA versions ----
+# Try to import the real ConversationResult; otherwise provide a compatible shim.
 try:
     from homeassistant.components.conversation.agent import ConversationResult  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover
+except Exception:
     try:
         from homeassistant.components.conversation import agent as _agent_mod  # type: ignore[attr-defined]
         ConversationResult = _agent_mod.ConversationResult  # type: ignore[assignment]
-    except Exception:  # last-resort duck-typed shim
+    except Exception:
+
         class ConversationResult:  # type: ignore[misc]
-            def __init__(self, *, conversation_id, response, continue_conversation):
+            """Minimal shim consistent with HA's use of ConversationResult."""
+
+            def __init__(self, *, conversation_id, response, continue_conversation) -> None:
                 self.conversation_id = conversation_id
                 self.response = response
                 self.continue_conversation = continue_conversation
-# -------------------------------------------------------------------------
+
+            def as_dict(self) -> dict[str, Any]:
+                return {
+                    "conversation_id": self.conversation_id,
+                    "response": self.response,
+                    "continue_conversation": self.continue_conversation,
+                }
 
 from .const import (
     DOMAIN,
@@ -47,7 +56,6 @@ from .const import (
     MODEL_STRATEGY_FORCE_CHAT,
     MODEL_STRATEGY_FORCE_RESPONSES,
 )
-# IMPORTANT: Do NOT import openai_support at module scope; import inside handler.
 from .model_capabilities import detect_model_capabilities
 from .responses_adapter import response_text_from_responses_result
 
@@ -69,7 +77,6 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         self.hass = hass
         self.entry = entry
 
-    # Required by your HA build
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
         return "*"
@@ -89,8 +96,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         self, user_input: Any, chat_log: ChatLog
     ) -> ConversationResult:
         """Handle a message from Assist."""
-        # Lazy import here avoids importing the OpenAI SDK during platform import.
-        from .openai_support import build_async_client  # local import by design
+        # Lazy import avoids SDK import at module load
+        from .openai_support import build_async_client
 
         data = self.entry.data
         options = {**self._default_options(), **self.entry.options}
@@ -104,9 +111,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         caps = detect_model_capabilities(model)
         strategy = options.get(CONF_MODEL_STRATEGY)
 
-        # Decide call path:
-        # - reasoning models -> Responses API (unless FORCE_CHAT)
-        # - non-reasoning -> Chat Completions by default
+        # Routing
         use_responses = (
             (strategy == MODEL_STRATEGY_FORCE_RESPONSES)
             or (strategy == MODEL_STRATEGY_AUTO and caps.is_reasoning)
@@ -134,15 +139,20 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         user_text = user_input.text
 
         if use_responses:
-            # Responses API: no sampling params for reasoning models.
+            # ✅ Correct Responses API schema:
+            # - System instructions go into "instructions"
+            # - Input content items use type "input_text"
             payload: dict[str, Any] = {
                 "model": model,
                 "input": [
-                    {"role": "system", "content": [{"type": "text", "text": sys_prompt}]} if sys_prompt else None,
-                    {"role": "user", "content": [{"type": "text", "text": user_text}]},
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": user_text}],
+                    }
                 ],
             }
-            payload["input"] = [x for x in payload["input"] if x]
+            if sys_prompt:
+                payload["instructions"] = sys_prompt
 
             max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
             if max_tokens > 0:
@@ -150,6 +160,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
             if caps.is_reasoning:
                 effort = options.get(CONF_REASONING_EFFORT)
+                # OpenAI 1.x expects nested object: {"reasoning": {"effort": "low|medium|high|minimal"}}
                 payload["reasoning"] = {"effort": effort}
 
             try:
@@ -166,7 +177,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 _LOGGER.exception("Responses API failure: %s", err)
                 return _err(str(err), user_input.language)
 
-        # Chat Completions path (default for non-reasoning)
+        # Fallback: Chat Completions
         messages = []
         if sys_prompt:
             messages.append({"role": "system", "content": sys_prompt})
@@ -176,6 +187,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
         max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
         if max_tokens > 0:
+            # Some reasoning-capable chat models use max_completion_tokens
             kwargs["max_completion_tokens" if caps.is_reasoning else "max_tokens"] = max_tokens
 
         if caps.accepts_temperature:
@@ -199,11 +211,11 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
             _LOGGER.exception("Chat Completions failure: %s", err)
             return _err(str(err), user_input.language)
 
-    # ---- internal helpers ----
-
     def _default_options(self) -> dict[str, Any]:
         return {
-            CONF_CHAT_MODEL: self.entry.options.get(CONF_CHAT_MODEL) or self.entry.data.get(CONF_CHAT_MODEL) or "gpt-5",
+            CONF_CHAT_MODEL: self.entry.options.get(CONF_CHAT_MODEL)
+            or self.entry.data.get(CONF_CHAT_MODEL)
+            or "gpt-5",
             CONF_MODEL_STRATEGY: self.entry.options.get(CONF_MODEL_STRATEGY) or MODEL_STRATEGY_AUTO,
             CONF_USE_RESPONSES_API: self.entry.options.get(CONF_USE_RESPONSES_API, DEFAULT_USE_RESPONSES_API),
             CONF_TEMPERATURE: self.entry.options.get(CONF_TEMPERATURE, 0.4),
@@ -235,5 +247,4 @@ def _err(msg: str, language: Optional[str]) -> ConversationResult:
 
 
 def _should_continue(text: str) -> bool:
-    # Simple heuristic: if the model asks a question, prompt follow-up
     return "?" in (text or "")
