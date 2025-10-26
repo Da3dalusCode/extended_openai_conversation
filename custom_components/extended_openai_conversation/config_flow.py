@@ -8,7 +8,9 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_API_KEY, CONF_NAME
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import OptionsFlowWithReload
 
 from .const import (
     DOMAIN,
@@ -28,12 +30,8 @@ from .const import (
     CONF_TEMPERATURE,
     CONF_TOP_P,
     CONF_MAX_TOKENS,
-    # reasoning
     CONF_REASONING_EFFORT,
-    # misc
-    CONF_SKIP_AUTH,
-    DEFAULT_BASE_URL,
-    DEFAULT_API_VERSION,
+    # defaults
     DEFAULT_CHAT_MODEL,
     DEFAULT_USE_RESPONSES_API,
     DEFAULT_MODEL_STRATEGY,
@@ -46,88 +44,90 @@ from .const import (
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow."""
+    """Handle a config flow for Extended OpenAI Conversation."""
+
     VERSION = CONFIG_ENTRY_VERSION
 
     async def async_step_user(self, user_input: Dict[str, Any] | None = None) -> FlowResult:
-        errors: dict[str, str] = {}
-
+        """Collect the API key and initial model."""
         if user_input is not None:
+            # Create the entry. Options are configured in OptionsFlow.
             title = user_input.get(CONF_NAME) or "Extended OpenAI Conversation"
-            data = {
-                CONF_NAME: title,
-                CONF_API_KEY: user_input[CONF_API_KEY],
-                CONF_BASE_URL: user_input.get(CONF_BASE_URL, DEFAULT_BASE_URL),
-                CONF_API_VERSION: user_input.get(CONF_API_VERSION, DEFAULT_API_VERSION),
-                CONF_ORGANIZATION: user_input.get(CONF_ORGANIZATION) or None,
-                CONF_CHAT_MODEL: user_input.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL),
-                CONF_SKIP_AUTH: bool(user_input.get(CONF_SKIP_AUTH, False)),
-            }
-            return self.async_create_entry(title=title, data=data)
+            return self.async_create_entry(title=title, data=user_input)
 
         schema = vol.Schema(
             {
-                vol.Optional(CONF_NAME, default="Extended OpenAI Conversation"): str,
                 vol.Required(CONF_API_KEY): str,
-                vol.Optional(CONF_BASE_URL, default=DEFAULT_BASE_URL): str,
-                vol.Optional(CONF_API_VERSION, default=DEFAULT_API_VERSION): str,
-                vol.Optional(CONF_ORGANIZATION): str,
                 vol.Optional(CONF_CHAT_MODEL, default=DEFAULT_CHAT_MODEL): str,
+                vol.Optional(CONF_NAME, default="Extended OpenAI Conversation"): str,
+                vol.Optional(CONF_BASE_URL, default=""): str,
+                vol.Optional(CONF_ORGANIZATION, default=""): str,
+                vol.Optional(CONF_API_VERSION, default=""): str,
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="user", data_schema=schema)
 
     async def async_step_reconfigure(self, user_input: Dict[str, Any] | None = None) -> FlowResult:
-        """Reconfigure base creds later (HA 2024.10+)."""
+        """Reconfigure the entry (e.g., rotate API key)."""
         entry = self._get_reconfigure_entry()
-        if user_input is not None:
-            new_data = {
-                **entry.data,
-                CONF_NAME: user_input.get(CONF_NAME, entry.data.get(CONF_NAME)),
-                CONF_API_KEY: user_input.get(CONF_API_KEY, entry.data.get(CONF_API_KEY)),
-                CONF_BASE_URL: user_input.get(CONF_BASE_URL, entry.data.get(CONF_BASE_URL, DEFAULT_BASE_URL)),
-                CONF_API_VERSION: user_input.get(CONF_API_VERSION, entry.data.get(CONF_API_VERSION, DEFAULT_API_VERSION)),
-                CONF_ORGANIZATION: user_input.get(CONF_ORGANIZATION, entry.data.get(CONF_ORGANIZATION)),
-                CONF_CHAT_MODEL: user_input.get(CONF_CHAT_MODEL, entry.data.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)),
-            }
-            self.hass.config_entries.async_update_entry(entry, data=new_data)
-            await self.hass.config_entries.async_reload(entry.entry_id)
-            return self.async_create_entry(title=new_data.get(CONF_NAME) or entry.title, data={})
 
-        schema = vol.Schema(
-            {
-                vol.Optional(CONF_NAME, default=entry.data.get(CONF_NAME, entry.title)): str,
-                vol.Required(CONF_API_KEY, default=entry.data.get(CONF_API_KEY)): str,
-                vol.Optional(CONF_BASE_URL, default=entry.data.get(CONF_BASE_URL, DEFAULT_BASE_URL)): str,
-                vol.Optional(CONF_API_VERSION, default=entry.data.get(CONF_API_VERSION, DEFAULT_API_VERSION)): str,
-                vol.Optional(CONF_ORGANIZATION, default=entry.data.get(CONF_ORGANIZATION, "")): str,
-                vol.Optional(CONF_CHAT_MODEL, default=entry.data.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)): str,
-            }
-        )
-        return self.async_show_form(step_id="reconfigure", data_schema=schema)
+        if user_input is None:
+            data = entry.data
+            schema = vol.Schema(
+                {
+                    vol.Required(CONF_API_KEY, default=data.get(CONF_API_KEY, "")): str,
+                    vol.Optional(CONF_CHAT_MODEL, default=data.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)): str,
+                    vol.Optional(CONF_NAME, default=entry.title or "Extended OpenAI Conversation"): str,
+                    vol.Optional(CONF_BASE_URL, default=data.get(CONF_BASE_URL, "")): str,
+                    vol.Optional(CONF_ORGANIZATION, default=data.get(CONF_ORGANIZATION, "")): str,
+                    vol.Optional(CONF_API_VERSION, default=data.get(CONF_API_VERSION, "")): str,
+                }
+            )
+            return self.async_show_form(step_id="reconfigure", data_schema=schema)
 
-    @staticmethod
-    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:
-        return OptionsFlowHandler(config_entry)
+        # Update and let the helper safely reload & finish the flow.
+        new_data = {
+            **entry.data,
+            CONF_API_KEY: user_input.get(CONF_API_KEY, entry.data.get(CONF_API_KEY, "")),
+            CONF_CHAT_MODEL: user_input.get(CONF_CHAT_MODEL, entry.data.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)),
+            CONF_BASE_URL: user_input.get(CONF_BASE_URL, entry.data.get(CONF_BASE_URL, "")),
+            CONF_ORGANIZATION: user_input.get(CONF_ORGANIZATION, entry.data.get(CONF_ORGANIZATION, "")),
+            CONF_API_VERSION: user_input.get(CONF_API_VERSION, entry.data.get(CONF_API_VERSION, "")),
+        }
+        # One atomic operation: update → reload → abort the flow. (Prevents loop/deadlock.)
+        return self.async_update_reload_and_abort(entry, data_updates=new_data)
+        # Reconfigure guidance: https://developers.home-assistant.io/docs/config_entries_config_flow_handler  # noqa: E501
 
 
-class OptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle options."""
+@staticmethod
+@callback
+def async_get_options_flow(
+    config_entry: config_entries.ConfigEntry,
+) -> "OptionsFlowHandler":  # type: ignore[name-defined]
+    """Return the options flow."""
+    return OptionsFlowHandler()
 
-    # Do NOT assign to self.config_entry (deprecated). We keep a private copy instead.
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self._entry = config_entry
+
+class OptionsFlowHandler(OptionsFlowWithReload, config_entries.OptionsFlow):  # type: ignore[misc]
+    """Handle options for Extended OpenAI Conversation.
+
+    Uses OptionsFlowWithReload to automatically reload on save.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
 
     async def async_step_init(self, user_input: Dict[str, Any] | None = None) -> FlowResult:
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+        entry = self.config_entry  # Provided by HA (no manual assignment)
+        opts = entry.options or {}
 
-        opts = self._entry.options
-        data = self._entry.data
+        if user_input is not None:
+            # Just store the options; base class will handle the reload.
+            return self.async_create_entry(data=user_input)
 
         schema = vol.Schema(
             {
-                vol.Optional(CONF_CHAT_MODEL, default=opts.get(CONF_CHAT_MODEL, data.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL))): str,
+                vol.Optional(CONF_CHAT_MODEL, default=opts.get(CONF_CHAT_MODEL, DEFAULT_CHAT_MODEL)): str,
                 vol.Optional(CONF_MODEL_STRATEGY, default=opts.get(CONF_MODEL_STRATEGY, DEFAULT_MODEL_STRATEGY)): vol.In(
                     [MODEL_STRATEGY_AUTO, MODEL_STRATEGY_FORCE_CHAT, MODEL_STRATEGY_FORCE_RESPONSES]
                 ),
@@ -141,4 +141,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional("prompt", default=opts.get("prompt", DEFAULT_PROMPT)): str,
             }
         )
+        # Provide suggested values via helper (keeps input values on validation errors, etc.).
+        schema = self.add_suggested_values_to_schema(schema, opts)
         return self.async_show_form(step_id="init", data_schema=schema)
