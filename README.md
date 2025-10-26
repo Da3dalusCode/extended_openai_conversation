@@ -2,7 +2,7 @@
 
 A maintained fork of **Extended OpenAI Conversation** for **Home Assistant** that:
 - Works with **OpenAI Python SDK 1.x**
-- Supports **reasoning‑class models** via the **Responses API** (e.g., GPT‑5 family)
+- Supports **reasoning-class models** via the **Responses API** (e.g., GPT-5 family)
 - Integrates cleanly with **Assist pipelines**
 - Keeps memory scaffolding present but **OFF by default**
 
@@ -10,16 +10,16 @@ A maintained fork of **Extended OpenAI Conversation** for **Home Assistant** tha
 - This fork: https://github.com/Da3dalusCode/extended_openai_conversation
 
 ## Features
-- **Assist‑compatible conversation entity** (returns current `ConversationResult`)  
+- **Assist-compatible conversation entity** (returns current `ConversationResult`)  
 - **Responses API** for reasoning models  
   - Inputs as `input_text` items  
   - System prompt in `instructions`  
   - `reasoning: { effort }` when applicable  
   - No `temperature/top_p` on reasoning endpoints :contentReference[oaicite:14]{index=14}  
-- **Chat Completions** for non‑reasoning models (sampling allowed)  
-- **Options gear** (model, strategy, effort, max tokens, temp/top‑p, prompt) via `OptionsFlowWithReload` :contentReference[oaicite:15]{index=15}  
+- **Chat Completions** for non-reasoning models (sampling allowed)  
+- **Options gear** (model, strategy, effort, max tokens, temp/top-p, prompt) via `OptionsFlowWithReload` :contentReference[oaicite:15]{index=15}  
 - **Azure OpenAI** support (Base URL + API version) :contentReference[oaicite:16]{index=16}  
-- **Async‑safe client** using HA’s shared HTTPX to avoid blocking SSL CA loads
+- **Async-safe client** using HA’s shared HTTPX to avoid blocking SSL CA loads
 
 ## Requirements
 - Home Assistant **2025.4.0+** recommended  
@@ -36,9 +36,9 @@ A maintained fork of **Extended OpenAI Conversation** for **Home Assistant** tha
 Open the integration card → **Configure** (gear):
 - **Model** (default `gpt-5`)  
 - **Model strategy**: `auto` \| `force_chat_completions` \| `force_responses_api`  
-- **Use Responses API** (for non‑reasoning models when strategy is `auto`)  
+- **Use Responses API** (for non-reasoning models when strategy is `auto`)  
 - **Reasoning effort**: `minimal` \| `low` \| `medium` \| `high`  
-- **Max tokens**, **Temperature**, **Top‑p**, **System prompt**
+- **Max tokens**, **Temperature**, **Top-p**, **System prompt**
 
 ### Recommended (long, smart chats)
 - Model: `gpt-5`  
@@ -51,7 +51,7 @@ Open the integration card → **Configure** (gear):
 ## Assist usage
 - **Settings → Voice Assistants** → set **Conversation agent** = *Extended OpenAI Conversation*  
 - Use Assist (text/voice) or ESPHome satellites normally.  
-- The agent returns `continue_conversation` when follow‑up is implied.
+- The agent returns `continue_conversation` when follow-up is implied.
 
 ## Troubleshooting
 - **400: invalid input type** (older builds): ensure you’re on v1.4.0+ (we use `input_text` + `instructions`). :contentReference[oaicite:18]{index=18}  
@@ -64,3 +64,7 @@ action: logger.set_level
 data:
   custom_components.extended_openai_conversation: debug
   homeassistant.components.conversation: debug
+```
+
+## Memory scaffolding
+- Present but OFF by default (no network calls). When enabled in a future release, memory will write/query a provider and prepend retrieved context to instructions, following HA’s LLM guidance.
