@@ -47,7 +47,7 @@ from .const import (
     MODEL_STRATEGY_FORCE_CHAT,
     MODEL_STRATEGY_FORCE_RESPONSES,
 )
-from .openai_support import build_async_client
+# IMPORTANT: Do NOT import openai_support at module scope; we import inside the handler.
 from .model_capabilities import detect_model_capabilities
 from .responses_adapter import response_text_from_responses_result
 
@@ -91,6 +91,9 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         self, user_input: Any, chat_log: ChatLog
     ) -> ConversationResult:
         """Handle a message from Assist (HA calls this)."""
+        # Lazy import here avoids importing the OpenAI SDK during platform import.
+        from .openai_support import build_async_client  # local import by design
+
         data = self.entry.data
         options = {**self._default_options(), **self.entry.options}
 
@@ -117,7 +120,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 use_responses = True
 
         _LOGGER.debug(
-            "EOC setup: model=%s caps=%s strategy=%s use_responses=%s",
+            "EOC: model=%s caps=%s strategy=%s use_responses=%s",
             model, caps, strategy, use_responses
         )
 
@@ -234,5 +237,5 @@ def _err(msg: str, language: Optional[str]) -> ConversationResult:
 
 
 def _should_continue(text: str) -> bool:
-    # Simple heuristic: if assistant asks a question, request follow-up
+    # Simple heuristic: if the model asks a question, prompt follow-up
     return "?" in (text or "")
