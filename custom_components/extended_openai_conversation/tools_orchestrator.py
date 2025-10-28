@@ -9,7 +9,7 @@ import logging
 import time
 from typing import Any
 
-from homeassistant.components.conversation.chat_log import AssistantContent, ChatLog
+from homeassistant.components.conversation.chat_log import ChatLog, ToolResultContent
 from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -143,13 +143,15 @@ class ToolsOrchestrator:
         ]
 
     def conversation_tools_for_responses(
-        self, hass: HomeAssistant
+        self, hass: HomeAssistant, model: str | None
     ) -> list[dict[str, Any]]:
         tools = [
             {"type": "function", "function": dict(spec)}
             for spec in self._tool_specs
         ]
-        if web_search := build_responses_web_search_tool(hass, self.options):
+        if web_search := build_responses_web_search_tool(
+            hass, self.options, model=model
+        ):
             tools.append(web_search)
         return tools
 
@@ -163,21 +165,28 @@ class ToolsOrchestrator:
         self._call_count = 0
         self._chain_depth = 0
         self._started = time.monotonic()
+        self._exposed_entities = None
 
     @property
     def max_chain_depth(self) -> int:
         return self._max_chain_depth
 
-    def _log_tool_event(self, message: str) -> None:
-        if not self.chat_log:
-            return
-        self.chat_log.async_add_assistant_content_without_tools(
-            AssistantContent(agent_id=self.agent_id, content=message)
-        )
-
     def _ensure_call_budget(self) -> None:
         if self._max_calls and self._call_count >= self._max_calls:
             raise ToolExecutionError("Maximum tool calls exceeded")
+
+    def _ensure_time_budget(self) -> None:
+        if self._call_timeout <= 0:
+            return
+        max_runtime = self._call_timeout * max(1, self._max_chain_depth)
+        elapsed = time.monotonic() - self._started
+        if elapsed > max_runtime:
+            LOGGER.debug(
+                "Tool chain time budget exceeded after %.2fs (limit %.2fs)",
+                elapsed,
+                max_runtime,
+            )
+            raise ToolExecutionError("Tool chain time budget exceeded")
 
     def _get_exposed_entities(self) -> list[dict[str, Any]]:
         if self._exposed_entities is not None:
@@ -185,7 +194,7 @@ class ToolsOrchestrator:
 
         exposed: list[dict[str, Any]] = []
         for state in self.hass.states.async_all():
-            if async_should_expose(self.hass, "conversation", state.entity_id):
+            if async_should_expose(self.hass, self.agent_id, state.entity_id):
                 exposed.append(
                     {
                         "entity_id": state.entity_id,
@@ -220,6 +229,7 @@ class ToolsOrchestrator:
         call_id: str | None,
     ) -> str:
         self._ensure_call_budget()
+        self._ensure_time_budget()
         self._call_count += 1
         runtime = self._runtime_map.get(name)
         if runtime is None:
@@ -230,22 +240,59 @@ class ToolsOrchestrator:
         except (json.JSONDecodeError, InvalidFunction) as err:
             raise ToolExecutionError(f"Invalid arguments for {name}: {err}") from err
 
-        self._log_tool_event(f"[tool:start] {name}")
-
+        LOGGER.debug(
+            "Tool %s starting (call_id=%s, invocation=%s/%s)",
+            name,
+            call_id or "<none>",
+            self._call_count,
+            self._max_calls if self._max_calls else "unbounded",
+        )
+        started = time.perf_counter()
         try:
             result = await asyncio.wait_for(
                 self._invoke(runtime, payload, user_input),
                 timeout=self._call_timeout,
             )
         except asyncio.TimeoutError as err:
-            raise ToolExecutionError(f"Tool {name} timed out") from err
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            message = f"Tool {name} timed out"
+            self._record_tool_result(
+                call_id=call_id or name or "tool",
+                tool_name=name,
+                text=message,
+                elapsed_ms=elapsed_ms,
+            )
+            raise ToolExecutionError(message) from err
         except (HomeAssistantError, ToolExecutionError) as err:
-            raise ToolExecutionError(str(err)) from err
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            message = str(err) or f"Tool {name} failed"
+            self._record_tool_result(
+                call_id=call_id or name or "tool",
+                tool_name=name,
+                text=message,
+                elapsed_ms=elapsed_ms,
+            )
+            raise ToolExecutionError(message) from err
         except Exception as err:  # pragma: no cover - defensive guard
-            raise ToolExecutionError(f"Tool {name} failed: {err}") from err
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            message = f"Tool {name} failed: {err}"
+            self._record_tool_result(
+                call_id=call_id or name or "tool",
+                tool_name=name,
+                text=message,
+                elapsed_ms=elapsed_ms,
+            )
+            raise ToolExecutionError(message) from err
 
+        elapsed_ms = (time.perf_counter() - started) * 1000
         text = self._stringify_result(result)
-        self._log_tool_event(f"[tool:result] {name}: {text}")
+        LOGGER.debug("Tool %s completed in %.1f ms -> %s", name, elapsed_ms, text)
+        self._record_tool_result(
+            call_id=call_id or name or "tool",
+            tool_name=name,
+            text=text,
+            elapsed_ms=elapsed_ms,
+        )
         return text
 
     def _prepare_arguments(
@@ -300,3 +347,30 @@ class ToolsOrchestrator:
             raise ToolExecutionError(str(err)) from err
         except FunctionNotFound as err:
             raise ToolExecutionError(str(err)) from err
+
+    def _record_tool_result(
+        self,
+        *,
+        call_id: str,
+        tool_name: str,
+        text: str,
+        elapsed_ms: float,
+    ) -> None:
+        if not self.chat_log:
+            return
+
+        payload: dict[str, Any] = {
+            "content": text,
+            "elapsed_ms": round(elapsed_ms, 2),
+        }
+        try:
+            self.chat_log.async_add_assistant_content_without_tools(
+                ToolResultContent(
+                    agent_id=self.agent_id,
+                    tool_call_id=call_id,
+                    tool_name=tool_name,
+                    tool_result=payload,
+                )
+            )
+        except Exception as err:  # pragma: no cover - defensive guard
+            LOGGER.debug("Unable to append tool result to chat log: %s", err)
