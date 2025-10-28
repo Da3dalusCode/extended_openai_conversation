@@ -53,3 +53,40 @@ def response_text_from_responses_result(result: Any) -> str:
             pass
 
     return ""
+
+
+def extract_function_calls_from_response(result: Any) -> list[dict[str, Any]]:
+    """Return function-call payloads from a Responses API result."""
+
+    try:
+        data = result.model_dump()
+    except AttributeError:
+        data = result
+
+    if not isinstance(data, dict):
+        return []
+
+    calls: list[dict[str, Any]] = []
+
+    def _maybe_add(item: Any) -> None:
+        if not item:
+            return
+        if hasattr(item, "model_dump"):
+            item = item.model_dump()
+        if not isinstance(item, dict):
+            return
+        if item.get("type") == "function_call":
+            calls.append(item)
+
+    for entry in data.get("output", []):
+        _maybe_add(entry)
+        if not isinstance(entry, dict) and not hasattr(entry, "model_dump"):
+            continue
+        if hasattr(entry, "model_dump"):
+            entry = entry.model_dump()
+        if not isinstance(entry, dict):
+            continue
+        for part in entry.get("content", []):
+            _maybe_add(part)
+
+    return calls

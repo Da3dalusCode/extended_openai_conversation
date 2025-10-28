@@ -6,10 +6,8 @@ import os
 import re
 import sqlite3
 import time
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from urllib import parse
-
-from bs4 import BeautifulSoup
 
 try:
     from openai import AsyncAzureOpenAI, AsyncOpenAI
@@ -18,6 +16,9 @@ except Exception:  # pragma: no cover
     AsyncOpenAI = None  # type: ignore[assignment]
 import voluptuous as vol
 import yaml
+
+if TYPE_CHECKING:
+    from bs4 import BeautifulSoup
 
 from homeassistant.components import (
     automation,
@@ -64,6 +65,18 @@ _LOGGER = logging.getLogger(__name__)
 
 
 AZURE_DOMAIN_PATTERN = r"\.(openai\.azure\.com|azure-api\.net)"
+
+HISTORY_SUMMARY_LIMIT = 10
+
+
+def _lazy_import_bs4():
+    try:
+        from bs4 import BeautifulSoup  # type: ignore
+    except ImportError as exc:  # pragma: no cover - optional dep
+        raise HomeAssistantError(
+            "beautifulsoup4 is required for the scrape tool but is not installed."
+        ) from exc
+    return BeautifulSoup
 
 
 def get_function_executor(value: str):
@@ -382,7 +395,30 @@ class NativeFunctionExecutor(FunctionExecutor):
                 no_attributes,
             )
 
-        return [[self.as_dict(item) for item in sublist] for sublist in result.values()]
+        summary: list[dict[str, Any]] = []
+        for entity_id, states in result.items():
+            samples: list[dict[str, Any]] = []
+            trimmed = list(states)[-HISTORY_SUMMARY_LIMIT:]
+            for state in trimmed:
+                if isinstance(state, State):
+                    samples.append(
+                        {
+                            "last_changed": state.last_changed.isoformat(),
+                            "state": state.state,
+                            "attributes": None if no_attributes else dict(state.attributes),
+                        }
+                    )
+                elif isinstance(state, dict):
+                    samples.append(
+                        {
+                            "last_changed": state.get("last_changed"),
+                            "state": state.get("state"),
+                            "attributes": None if no_attributes else state.get("attributes"),
+                        }
+                    )
+            summary.append({"entity_id": entity_id, "samples": samples})
+
+        return summary
 
     async def get_energy(
         self,
@@ -554,6 +590,7 @@ class ScrapeFunctionExecutor(FunctionExecutor):
         user_input: conversation.ConversationInput,
         exposed_entities,
     ):
+        _lazy_import_bs4()
         config = function
         rest_data = _get_rest_data(hass, config, arguments)
         coordinator = scrape.coordinator.ScrapeCoordinator(
@@ -586,7 +623,7 @@ class ScrapeFunctionExecutor(FunctionExecutor):
 
     def _async_update_from_rest_data(
         self,
-        data: BeautifulSoup,
+        data: Any,
         sensor_config: dict[str, Any],
         arguments: dict[str, Any],
     ) -> None:
@@ -601,7 +638,7 @@ class ScrapeFunctionExecutor(FunctionExecutor):
 
         return value
 
-    def _extract_value(self, data: BeautifulSoup, sensor_config: dict[str, Any]) -> Any:
+    def _extract_value(self, data: Any, sensor_config: dict[str, Any]) -> Any:
         """Parse the html extraction in the executor."""
         value: str | list[str] | None
         select = sensor_config[scrape.const.CONF_SELECT]

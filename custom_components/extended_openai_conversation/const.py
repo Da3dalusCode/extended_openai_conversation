@@ -30,6 +30,33 @@ CONF_MAX_TOKENS = "max_tokens"
 # Optional scaffolding (off by default)
 CONF_MEMORY_ENABLED = "memory_enabled"
 CONF_MEMORY_DEFAULT_NAMESPACE = "memory_default_namespace"
+CONF_MEMORY_BASE_URL = "memory_base_url"
+CONF_MEMORY_API_KEY = "memory_api_key"
+CONF_MEMORY_WRITE_PATH = "memory_write_path"
+CONF_MEMORY_SEARCH_PATH = "memory_search_path"
+
+# Toolbox / tools
+CONF_FUNCTIONS = "functions"
+CONF_FUNCTIONS_RAW = "functions_yaml"
+CONF_MAX_TOOL_CALLS = "max_tool_calls"
+CONF_MAX_TOOL_CHAIN = "max_tool_chain"
+CONF_TOOL_TIMEOUT = "tool_timeout"
+CONF_TOOL_MAX_OUTPUT_CHARS = "tool_max_output_chars"
+CONF_ENABLE_WEB_SEARCH = "enable_web_search"
+CONF_WEB_SEARCH_CONTEXT_SIZE = "web_search_context_size"
+CONF_INCLUDE_HOME_LOCATION = "include_home_location"
+CONF_ENABLE_MCP = "enable_mcp"
+CONF_MCP_TIMEOUT = "mcp_timeout"
+CONF_MCP_MAX_PAYLOAD = "mcp_max_payload"
+
+WEB_SEARCH_CONTEXT_SIZE_SMALL = "small"
+WEB_SEARCH_CONTEXT_SIZE_MEDIUM = "medium"
+WEB_SEARCH_CONTEXT_SIZE_LARGE = "large"
+WEB_SEARCH_CONTEXT_SIZE_PRESETS = {
+    WEB_SEARCH_CONTEXT_SIZE_SMALL: 256,
+    WEB_SEARCH_CONTEXT_SIZE_MEDIUM: 512,
+    WEB_SEARCH_CONTEXT_SIZE_LARGE: 1024,
+}
 
 # Optional service
 SERVICE_QUERY_IMAGE = "query_image"
@@ -47,3 +74,99 @@ DEFAULT_MAX_TOKENS = 300
 DEFAULT_PROMPT = ""
 DEFAULT_MEMORY_ENABLED = False
 DEFAULT_MEMORY_DEFAULT_NAMESPACE = "default"
+DEFAULT_MEMORY_BASE_URL = None
+DEFAULT_MEMORY_API_KEY = None
+DEFAULT_MEMORY_WRITE_PATH = "/v1/memory/write"
+DEFAULT_MEMORY_SEARCH_PATH = "/v1/memory/search"
+DEFAULT_FUNCTIONS: list[dict[str, object]] = [
+    {
+        "spec": {
+            "name": "execute_service",
+            "description": "Call one or more Home Assistant services on entities exposed to Assist.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "list": {
+                        "type": "array",
+                        "description": "Service calls to execute in order.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "domain": {
+                                    "type": "string",
+                                    "description": "Service domain, e.g. light or climate.",
+                                },
+                                "service": {
+                                    "type": "string",
+                                    "description": "The service to call within the domain.",
+                                },
+                                "service_data": {
+                                    "type": "object",
+                                    "description": "Service data including entity_id for an exposed entity.",
+                                },
+                            },
+                            "required": ["domain", "service"],
+                        },
+                        "minItems": 1,
+                    }
+                },
+                "required": ["list"],
+            },
+        },
+        "function": {"type": "native", "name": "execute_service"},
+    },
+    {
+        "spec": {
+            "name": "add_automation",
+            "description": "Append a YAML automation to automations.yaml and reload automations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "automation_config": {
+                        "type": "string",
+                        "description": "YAML string describing the automation to add.",
+                    }
+                },
+                "required": ["automation_config"],
+            },
+        },
+        "function": {"type": "native", "name": "add_automation"},
+    },
+    {
+        "spec": {
+            "name": "get_history",
+            "description": "Fetch recent state history for entities exposed to Assist.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Entity IDs to query.",
+                    },
+                    "start_time": {
+                        "type": "string",
+                        "description": "ISO timestamp for the start of the window.",
+                    },
+                    "end_time": {
+                        "type": "string",
+                        "description": "ISO timestamp for the end of the window.",
+                    },
+                },
+                "required": ["entity_ids"],
+            },
+        },
+        "function": {"type": "native", "name": "get_history"},
+    },
+]
+DEFAULT_FUNCTIONS_RAW = ""
+DEFAULT_MAX_TOOL_CALLS = 4
+DEFAULT_MAX_TOOL_CHAIN = 3
+DEFAULT_TOOL_TIMEOUT = 12
+DEFAULT_TOOL_MAX_OUTPUT_CHARS = 4000
+DEFAULT_ENABLE_WEB_SEARCH = False
+DEFAULT_WEB_SEARCH_CONTEXT_SIZE = WEB_SEARCH_CONTEXT_SIZE_MEDIUM
+DEFAULT_INCLUDE_HOME_LOCATION = False
+DEFAULT_ENABLE_MCP = False
+DEFAULT_MCP_TIMEOUT = 8
+DEFAULT_MCP_MAX_PAYLOAD = 4096
