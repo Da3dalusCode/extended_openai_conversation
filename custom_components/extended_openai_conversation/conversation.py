@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import logging
 import asyncio
-from typing import Any, Optional, Literal
+import json
+import logging
+from typing import Any, Literal, Optional
 
 from homeassistant.components.conversation import (
+    AssistantContent,
+    ChatLog,
     ConversationEntity,
     ConversationEntityFeature,
-    ChatLog,
 )
 from homeassistant.helpers import intent
 from homeassistant.const import CONF_API_KEY
+from homeassistant.helpers.llm import ToolInput
 
 # Try to import the real ConversationResult; otherwise provide a compatible shim.
 try:
@@ -129,14 +132,18 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
         _LOGGER.debug(
             "EOC: model=%s caps=%s strategy=%s use_responses=%s",
-            model, caps, strategy, use_responses
+            model,
+            caps,
+            strategy,
+            use_responses,
         )
 
+        agent_id = user_input.agent_id or self.entity_id or DOMAIN
         orchestrator = ToolsOrchestrator(
             self.hass,
             options=options,
             chat_log=chat_log,
-            agent_id=self.entity_id or DOMAIN,
+            agent_id=agent_id,
         )
         orchestrator.reset()
 
@@ -162,6 +169,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                     caps=caps,
                     user_input=user_input,
                     orchestrator=orchestrator,
+                    chat_log=chat_log,
+                    agent_id=agent_id,
                 )
             except ToolExecutionError as err:
                 _LOGGER.warning("Responses tool failure: %s", err)
@@ -172,6 +181,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
             text = response_text_from_responses_result(responses_result)
             cont = _should_continue(text)
+            self._log_final_assistant_message(chat_log, agent_id, text)
             return _ok(
                 text=text,
                 language=user_input.language,
@@ -191,6 +201,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 caps=caps,
                 user_input=user_input,
                 orchestrator=orchestrator,
+                chat_log=chat_log,
+                agent_id=agent_id,
             )
         except ToolExecutionError as err:
             _LOGGER.warning("Chat tool failure: %s", err)
@@ -200,6 +212,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
             return _err(str(err), user_input.language)
 
         cont = _should_continue(text)
+        self._log_final_assistant_message(chat_log, agent_id, text)
         return _ok(
             text=text,
             language=user_input.language,
@@ -232,6 +245,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         caps,
         user_input,
         orchestrator: ToolsOrchestrator,
+        chat_log: ChatLog,
+        agent_id: str,
     ):
         payload: dict[str, Any] = {
             "model": model,
@@ -254,7 +269,9 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
             effort = options.get(CONF_REASONING_EFFORT)
             payload["reasoning"] = {"effort": effort}
 
-        tools = orchestrator.conversation_tools_for_responses(self.hass)
+        tools = orchestrator.conversation_tools_for_responses(
+            self.hass, model=model
+        )
         if tools:
             payload["tools"] = tools
 
@@ -265,6 +282,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
             result=result,
             orchestrator=orchestrator,
             user_input=user_input,
+            chat_log=chat_log,
+            agent_id=agent_id,
         )
 
     async def _handle_responses_tool_calls(
@@ -275,6 +294,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         result,
         orchestrator: ToolsOrchestrator,
         user_input,
+        chat_log: ChatLog,
+        agent_id: str,
     ):
         depth = 0
 
@@ -285,6 +306,11 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
             outputs: list[dict[str, Any]] = []
             if depth >= orchestrator.max_chain_depth:
+                _LOGGER.debug(
+                    "Responses tool loop stopped at depth %s (limit %s)",
+                    depth,
+                    orchestrator.max_chain_depth,
+                )
                 for idx, call in enumerate(calls):
                     call_id = call.get("call_id") or call.get("id") or str(idx)
                     outputs.append(
@@ -300,6 +326,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                     input=outputs,
                 )
                 return result
+
+            self._log_assistant_tool_calls(chat_log, agent_id, None, calls)
 
             for call in calls:
                 name = call.get("name")
@@ -346,6 +374,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         caps,
         user_input,
         orchestrator: ToolsOrchestrator,
+        chat_log: ChatLog,
+        agent_id: str,
     ) -> str:
         messages: list[dict[str, Any]] = []
         if sys_prompt:
@@ -381,7 +411,14 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
             if depth >= orchestrator.max_chain_depth:
                 suffix = "Tool chain limit reached; unable to continue."
+                _LOGGER.debug(
+                    "Chat tool loop stopped at depth %s (limit %s)",
+                    depth,
+                    orchestrator.max_chain_depth,
+                )
                 return f"{content}\n{suffix}" if content else suffix
+
+            self._log_assistant_tool_calls(chat_log, agent_id, content, tool_calls)
 
             assistant_entry = {
                 "role": "assistant",
@@ -429,6 +466,89 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
             kwargs["messages"] = messages
             depth += 1
+
+    def _log_assistant_tool_calls(
+        self,
+        chat_log: ChatLog | None,
+        agent_id: str,
+        content: str | None,
+        tool_calls: list[Any],
+    ) -> None:
+        if not chat_log or not tool_calls:
+            return
+
+        tool_inputs: list[ToolInput] = []
+        for call in tool_calls:
+            call_id, call_name, args = self._normalize_tool_call(call)
+            if not call_name:
+                continue
+            tool_inputs.append(
+                ToolInput(
+                    tool_name=call_name,
+                    tool_args=args,
+                    id=call_id or call_name,
+                    external=True,
+                )
+            )
+
+        if not tool_inputs:
+            return
+
+        chat_log.async_add_assistant_content_without_tools(
+            AssistantContent(
+                agent_id=agent_id,
+                content=content if content else None,
+                tool_calls=tool_inputs,
+            )
+        )
+
+    def _normalize_tool_call(
+        self, call: Any
+    ) -> tuple[Optional[str], Optional[str], dict[str, Any]]:
+        call_id: Optional[str] = None
+        name: Optional[str] = None
+        raw_args: Any = None
+
+        if hasattr(call, "id") or hasattr(call, "function"):
+            call_id = getattr(call, "id", None)
+            func = getattr(call, "function", None)
+            name = getattr(func, "name", None)
+            raw_args = getattr(func, "arguments", None)
+        elif isinstance(call, dict):
+            call_id = call.get("id") or call.get("call_id")
+            if (func := call.get("function")) and isinstance(func, dict):
+                name = func.get("name")
+                raw_args = func.get("arguments")
+            else:
+                name = call.get("name")
+                raw_args = call.get("arguments")
+
+        return call_id, name, self._parse_tool_arguments(raw_args)
+
+    @staticmethod
+    def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return {"raw": raw}
+            if isinstance(parsed, dict):
+                return parsed
+            return {"value": parsed}
+        if raw is None:
+            return {}
+        return {"value": raw}
+
+    def _log_final_assistant_message(
+        self, chat_log: ChatLog | None, agent_id: str, text: str
+    ) -> None:
+        if not chat_log:
+            return
+        chat_log.async_add_assistant_content_without_tools(
+            AssistantContent(agent_id=agent_id, content=text or "")
+        )
 
 
 def _ok(*, text: str, language: Optional[str], conversation_id: Optional[str], cont: bool) -> ConversationResult:

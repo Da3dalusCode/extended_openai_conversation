@@ -201,9 +201,14 @@ class FunctionExecutor(ABC):
     def validate_entity_ids(self, hass: HomeAssistant, entity_ids, exposed_entities):
         if any(hass.states.get(entity_id) is None for entity_id in entity_ids):
             raise EntityNotFound(entity_ids)
-        exposed_entity_ids = map(lambda e: e["entity_id"], exposed_entities)
-        if not set(entity_ids).issubset(exposed_entity_ids):
-            raise EntityNotExposed(entity_ids)
+        exposed_entity_ids = {exposed["entity_id"] for exposed in exposed_entities}
+        missing = set(entity_ids) - exposed_entity_ids
+        if missing:
+            _LOGGER.debug(
+                "Exposure denied for entities %s; not exposed to agent",
+                sorted(missing),
+            )
+            raise EntityNotExposed(sorted(missing))
 
     @abstractmethod
     async def execute(

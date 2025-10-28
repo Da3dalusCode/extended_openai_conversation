@@ -14,6 +14,7 @@ from .const import (
     DEFAULT_ENABLE_WEB_SEARCH,
     DEFAULT_WEB_SEARCH_CONTEXT_SIZE,
 )
+from .model_capabilities import detect_model_capabilities
 
 LOGGER = logging.getLogger(__name__)
 
@@ -72,12 +73,25 @@ def _build_user_location(hass: HomeAssistant) -> Dict[str, str] | None:
     return None
 
 
+def _model_supports_hosted_search(model: str | None) -> bool:
+    if not model:
+        return False
+    caps = detect_model_capabilities(model)
+    return caps.is_reasoning
+
+
 def build_responses_web_search_tool(
-    hass: HomeAssistant, options: dict[str, Any]
+    hass: HomeAssistant, options: dict[str, Any], *, model: str | None
 ) -> dict[str, Any] | None:
     """Return Responses API tool payload for hosted web search if enabled."""
 
     if not options.get(CONF_ENABLE_WEB_SEARCH, DEFAULT_ENABLE_WEB_SEARCH):
+        return None
+    if not _model_supports_hosted_search(model):
+        LOGGER.debug(
+            "Skipping web search (unsupported) for model '%s'",
+            model or "<unknown>",
+        )
         return None
 
     context_size = _normalize_context_size(
@@ -92,6 +106,11 @@ def build_responses_web_search_tool(
         if location := _build_user_location(hass):
             tool["user_location"] = location
 
+    LOGGER.debug(
+        "Web search tool enabled for model '%s' with context '%s'",
+        model or "<unknown>",
+        tool["search_context_size"],
+    )
     return tool
 
 
@@ -105,8 +124,7 @@ def configure_chat_completion_web_search(
     if not options.get(CONF_ENABLE_WEB_SEARCH, DEFAULT_ENABLE_WEB_SEARCH):
         return
 
-    LOGGER.info(
-        "Hosted web search is enabled but chat model '%s' does not expose the "
-        "feature via Chat Completions; continuing without search.",
+    LOGGER.debug(
+        "Skipping web search (unsupported) for chat completion model '%s'",
         model or "<unknown>",
     )
