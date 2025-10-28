@@ -4,7 +4,6 @@ import mimetypes
 from pathlib import Path
 from urllib.parse import urlparse
 
-from openai import AsyncOpenAI
 from openai._exceptions import OpenAIError
 from openai.types.chat.chat_completion_content_part_image_param import (
     ChatCompletionContentPartImageParam,
@@ -21,7 +20,15 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, selector
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN, SERVICE_QUERY_IMAGE
+from .const import (
+    DOMAIN,
+    SERVICE_QUERY_IMAGE,
+    CONF_API_KEY,
+    CONF_BASE_URL,
+    CONF_API_VERSION,
+    CONF_ORGANIZATION,
+)
+from .openai_support import build_async_client
 
 QUERY_IMAGE_SCHEMA = vol.Schema(
     {
@@ -59,10 +66,21 @@ async def async_setup_services(hass: HomeAssistant, config: ConfigType) -> None:
                 }
             ]
             _LOGGER.debug("Prompt for %s: %s", model, messages)
+            entry_id = call.data["config_entry"]
+            entry = hass.config_entries.async_get_entry(entry_id)
+            if entry is None:
+                raise HomeAssistantError(f"Config entry {entry_id} not found")
 
-            response = await AsyncOpenAI(
-                api_key=hass.data[DOMAIN][call.data["config_entry"]]["api_key"]
-            ).chat.completions.create(
+            data = entry.data
+            client = build_async_client(
+                hass,
+                api_key=data[CONF_API_KEY],
+                base_url=data.get(CONF_BASE_URL),
+                api_version=data.get(CONF_API_VERSION),
+                organization=data.get(CONF_ORGANIZATION),
+            )
+
+            response = await client.chat.completions.create(
                 model=model,
                 messages=messages,
                 max_tokens=call.data["max_tokens"],
