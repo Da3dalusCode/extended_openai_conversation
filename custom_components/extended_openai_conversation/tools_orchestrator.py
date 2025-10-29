@@ -185,6 +185,9 @@ class ToolsOrchestrator:
         self._exposed_entities_expires = None
         self._web_search_tool_type = None
         self._web_search_fallback_type = None
+        # Note: Options save/reconfigure triggers a reload of the entity which
+        # constructs a new orchestrator. This reset (and the reload) ensure the
+        # exposure cache reflects current UI settings immediately.
 
     @property
     def max_chain_depth(self) -> int:

@@ -5,9 +5,9 @@ from homeassistant.exceptions import HomeAssistantError
 class EntityNotFound(HomeAssistantError):
     """When referenced entity not found."""
 
-    def __init__(self, entity_id: str) -> None:
+    def __init__(self, entity_id) -> None:
         """Initialize error."""
-        super().__init__(self, f"entity {entity_id} not found")
+        super().__init__(f"entity {entity_id} not found")
         self.entity_id = entity_id
 
     def __str__(self) -> str:
@@ -18,9 +18,9 @@ class EntityNotFound(HomeAssistantError):
 class EntityNotExposed(HomeAssistantError):
     """When referenced entity not exposed."""
 
-    def __init__(self, entity_id: str) -> None:
+    def __init__(self, entity_id) -> None:
         """Initialize error."""
-        super().__init__(self, f"entity {entity_id} not exposed")
+        super().__init__(f"entity {entity_id} not exposed")
         self.entity_id = entity_id
 
     def __str__(self) -> str:
@@ -34,7 +34,6 @@ class CallServiceError(HomeAssistantError):
     def __init__(self, domain: str, service: str, data: object) -> None:
         """Initialize error."""
         super().__init__(
-            self,
             f"unable to call service {domain}.{service} with data {data}. One of 'entity_id', 'area_id', or 'device_id' is required",
         )
         self.domain = domain
@@ -51,7 +50,7 @@ class FunctionNotFound(HomeAssistantError):
 
     def __init__(self, function: str) -> None:
         """Initialize error."""
-        super().__init__(self, f"function '{function}' does not exist")
+        super().__init__(f"function '{function}' does not exist")
         self.function = function
 
     def __str__(self) -> str:
@@ -64,7 +63,7 @@ class NativeNotFound(HomeAssistantError):
 
     def __init__(self, name: str) -> None:
         """Initialize error."""
-        super().__init__(self, f"native function '{name}' does not exist")
+        super().__init__(f"native function '{name}' does not exist")
         self.name = name
 
     def __str__(self) -> str:
@@ -78,7 +77,6 @@ class FunctionLoadFailed(HomeAssistantError):
     def __init__(self) -> None:
         """Initialize error."""
         super().__init__(
-            self,
             "failed to load functions. Verify functions are valid in a yaml format",
         )
 
@@ -93,7 +91,6 @@ class ParseArgumentsFailed(HomeAssistantError):
     def __init__(self, arguments: str) -> None:
         """Initialize error."""
         super().__init__(
-            self,
             f"failed to parse arguments `{arguments}`. Increase maximum token to avoid the issue.",
         )
         self.arguments = arguments
@@ -109,7 +106,6 @@ class TokenLengthExceededError(HomeAssistantError):
     def __init__(self, token: int) -> None:
         """Initialize error."""
         super().__init__(
-            self,
             f"token length(`{token}`) exceeded. Increase maximum token to avoid the issue.",
         )
         self.token = token
@@ -125,7 +121,6 @@ class InvalidFunction(HomeAssistantError):
     def __init__(self, function_name: str) -> None:
         """Initialize error."""
         super().__init__(
-            self,
             f"failed to validate function `{function_name}`",
         )
         self.function_name = function_name

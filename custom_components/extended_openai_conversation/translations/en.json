@@ -56,5 +56,11 @@
         }
       }
     }
+  },
+  "errors": {
+    "rest_url_required": "REST tool requires a 'url' (http/https)",
+    "scrape_requirements": "Scrape tool requires a 'url' and 'select'",
+    "template_required": "Template tool requires a 'template' or 'value_template'",
+    "exposure_denied": "Some targets are hidden from Assist: {entities}"
   }
 }

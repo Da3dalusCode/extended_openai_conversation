@@ -33,8 +33,10 @@ from homeassistant.components.script.config import SCRIPT_ENTITY_SCHEMA
 from homeassistant.config import AUTOMATION_CONFIG_PATH
 from homeassistant.const import (
     CONF_ATTRIBUTE,
+    CONF_HEADERS,
     CONF_METHOD,
     CONF_NAME,
+    CONF_PARAMS,
     CONF_PAYLOAD,
     CONF_RESOURCE,
     CONF_RESOURCE_TEMPLATE,
@@ -69,7 +71,7 @@ AZURE_DOMAIN_PATTERN = r"\.(openai\.azure\.com|azure-api\.net)"
 HISTORY_SUMMARY_LIMIT = 10
 
 # REST helper mirrors https://www.home-assistant.io/integrations/rest/ defaults.
-REST_ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH"}
+REST_ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 REST_BODY_MAX_CHARS = 8192
 SCRAPE_SAFE_MAX_INDEX = 50
 
@@ -299,7 +301,71 @@ class NativeFunctionExecutor(FunctionExecutor):
             raise CallServiceError(domain, service, service_data)
         if not hass.services.has_service(domain, service):
             raise ServiceNotFound(domain, service)
+
+        # If explicit entity_id is provided, validate exposure as usual and drop area/device
         self.validate_entity_ids(hass, entity_id or [], exposed_entities)
+        if entity_id:
+            # Avoid bypass via extra selectors
+            service_data.pop("area_id", None)
+            service_data.pop("device_id", None)
+
+        # If no entity_id but area_id/device_id is provided, resolve targets and enforce exposure
+        if not entity_id and (area_id or device_id):
+            from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er  # lazy import
+            from homeassistant.helpers.exposed_entities import async_should_expose
+
+            def _as_list(x):
+                if x is None:
+                    return []
+                if isinstance(x, list):
+                    return x
+                return [x]
+
+            area_ids = [a for a in _as_list(area_id) if a]
+            device_ids = [d for d in _as_list(device_id) if d]
+
+            ent_reg = er.async_get(hass)
+            dev_reg = dr.async_get(hass)
+            targets: set[str] = set()
+
+            # Resolve by device_id
+            if device_ids:
+                for entry in ent_reg.entities.values():
+                    if entry.device_id and entry.device_id in device_ids:
+                        targets.add(entry.entity_id)
+
+            # Resolve by area_id (direct entity area or via device area)
+            if area_ids:
+                # Map device_id → area_id for quick lookups
+                device_area = {dev.id: dev.area_id for dev in dev_reg.devices.values()}
+                for entry in ent_reg.entities.values():
+                    if entry.area_id and entry.area_id in area_ids:
+                        targets.add(entry.entity_id)
+                        continue
+                    if entry.device_id and device_area.get(entry.device_id) in area_ids:
+                        targets.add(entry.entity_id)
+
+            # Filter to currently loaded entities only (avoid phantom registry entries)
+            targets = {eid for eid in targets if hass.states.get(eid) is not None}
+
+            hidden = [eid for eid in sorted(targets) if not async_should_expose(hass, "conversation", eid)]
+            if hidden:
+                _LOGGER.debug(
+                    "Exposure denied for assistant='conversation', hidden targets=%s",
+                    hidden,
+                )
+                return {"error": f"Some targets are hidden from Assist: {', '.join(hidden)}"}
+
+            if not targets:
+                return {"error": "No exposed targets found for the provided area/device"}
+
+            if targets:
+                # Limit the actual call to exposed targets only
+                service_data = dict(service_data)
+                service_data["entity_id"] = list(sorted(targets))
+                # Avoid passing area/device ids to the call to prevent bypass
+                service_data.pop("area_id", None)
+                service_data.pop("device_id", None)
 
         try:
             await hass.services.async_call(
@@ -557,9 +623,26 @@ class TemplateFunctionExecutor(FunctionExecutor):
                 {
                     vol.Required("value_template"): cv.template,
                     vol.Optional("parse_result"): bool,
+                    # Accept variables mapping for render context
+                    vol.Optional("vars", default={}): dict,
                 }
             )
         )
+
+    def to_arguments(self, arguments):
+        """Normalize friendly keys before schema validation.
+
+        Accepts 'template' → maps to 'value_template' and preserves optional 'vars'.
+        Verified against HA template helper contract (cv.template + Template render).
+        """
+        mapped = dict(arguments)
+        tmpl = mapped.get("value_template")
+        if tmpl is None and isinstance(mapped.get("template"), str):
+            mapped["value_template"] = mapped.pop("template")
+        # Ensure vars is a dict if provided
+        if "vars" in mapped and not isinstance(mapped["vars"], dict):
+            raise vol.Invalid("vars must be a mapping")
+        return self.data_schema(mapped)
 
     async def execute(
         self,
@@ -569,18 +652,27 @@ class TemplateFunctionExecutor(FunctionExecutor):
         user_input: conversation.ConversationInput,
         exposed_entities,
     ):
-        value_template: Template | None = function.get("value_template")
+        value_template: Template | None = function.get("value_template") or arguments.get("value_template")
         if value_template is None:
             template_str = arguments.get("template")
             if not isinstance(template_str, str) or not template_str.strip():
-                raise HomeAssistantError("Template tool requires a 'template' string.")
+                raise HomeAssistantError("Template tool requires a 'template' or 'value_template'")
             value_template = Template(template_str, hass)
 
         parse_result = function.get("parse_result", arguments.get("parse_json", False))
-        # Template helper mirrors https://www.home-assistant.io/docs/configuration/templating/
-        # behaviour and renders with provided arguments.
+        # Merge provided vars mapping (function-level or call-level) into the context
+        ctx_vars = {}
+        if isinstance(function.get("vars"), dict):
+            ctx_vars.update(function["vars"])
+        if isinstance(arguments.get("vars"), dict):
+            ctx_vars.update(arguments["vars"])
+        # Render using HA template environment (async, non-blocking).
+        # Pass all arguments as context plus optional 'vars'.
+        merged_context = dict(arguments)
+        if ctx_vars:
+            merged_context.update(ctx_vars)
         return value_template.async_render(
-            arguments,
+            merged_context,
             parse_result=bool(parse_result),
         )
 
@@ -597,6 +689,56 @@ class RestFunctionExecutor(FunctionExecutor):
             )
         )
 
+    def to_arguments(self, arguments):
+        """Normalize friendly keys (url, method, headers, params, timeout, body).
+
+        Map to REST data schema (resource, method, headers, params, timeout, payload).
+        Enforce http/https and request method allowlist including DELETE.
+        See HA REST integration docs for RESOURCE_SCHEMA fields.
+        """
+        mapped = dict(arguments)
+        # url → resource
+        url = mapped.pop("url", mapped.get(CONF_RESOURCE))
+        if url is None:
+            raise vol.Invalid("REST tool requires a 'url' (http/https)")
+        if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
+            raise vol.Invalid("REST tool requires a 'url' (http/https)")
+        mapped[CONF_RESOURCE] = url
+
+        # method allowlist (include DELETE)
+        method = str(mapped.pop("method", mapped.get(CONF_METHOD, "GET"))).upper()
+        # HA rest.RESOURCE_SCHEMA restricts methods to rest.const.METHODS (POST/GET)
+        # https://github.com/home-assistant/core/blob/dev/homeassistant/components/rest/schema.py
+        if method not in {"GET", "POST"}:
+            raise vol.Invalid("REST method not allowed")
+        mapped[CONF_METHOD] = method
+
+        # headers
+        if "headers" in mapped:
+            if not isinstance(mapped["headers"], dict):
+                raise vol.Invalid("headers must be an object")
+            mapped[CONF_HEADERS] = mapped.pop("headers")
+
+        # params
+        if "params" in mapped:
+            if not isinstance(mapped["params"], dict):
+                raise vol.Invalid("params must be an object")
+            mapped[CONF_PARAMS] = {str(k): str(v) for k, v in mapped["params"].items()}
+            mapped.pop("params", None)
+
+        # timeout
+        if "timeout" in mapped:
+            try:
+                mapped[CONF_TIMEOUT] = int(mapped.pop("timeout"))
+            except Exception as exc:
+                raise vol.Invalid("timeout must be an integer") from exc
+
+        # body → payload (cap also enforced in execute)
+        if "body" in mapped and CONF_PAYLOAD not in mapped:
+            mapped[CONF_PAYLOAD] = str(mapped.pop("body"))
+
+        return self.data_schema(mapped)
+
     async def execute(
         self,
         hass: HomeAssistant,
@@ -606,6 +748,11 @@ class RestFunctionExecutor(FunctionExecutor):
         exposed_entities,
     ):
         config = dict(function)
+
+        # Merge normalized arguments from to_arguments into config
+        for key in (CONF_RESOURCE, CONF_METHOD, CONF_HEADERS, CONF_PARAMS, CONF_TIMEOUT, CONF_VERIFY_SSL, CONF_PAYLOAD):
+            if key in arguments:
+                config[key] = arguments[key]
 
         request_url = arguments.get("url") or arguments.get(CONF_RESOURCE)
         if request_url:
@@ -617,9 +764,7 @@ class RestFunctionExecutor(FunctionExecutor):
         if CONF_RESOURCE not in config:
             raise HomeAssistantError("REST tool requires a 'url' argument.")
 
-        method = str(
-            arguments.get("method", config.get(CONF_METHOD, "GET"))
-        ).upper()
+        method = str(arguments.get("method", config.get(CONF_METHOD, "GET"))).upper()
         if method not in REST_ALLOWED_METHODS:
             raise HomeAssistantError(
                 f"REST method '{method}' is not allowed; "
@@ -627,14 +772,20 @@ class RestFunctionExecutor(FunctionExecutor):
             )
         config[CONF_METHOD] = method
 
-        headers = arguments.get("headers")
+        # Prefer normalized CONF_HEADERS set by to_arguments
+        headers = arguments.get(CONF_HEADERS) or arguments.get("headers")
         if headers is not None:
             if not isinstance(headers, dict):
                 raise HomeAssistantError("REST headers must be an object of strings.")
-            safe_headers: dict[str, str] = {}
-            for key, value in headers.items():
-                safe_headers[str(key)[:64]] = str(value)[:256]
-            config[rest.const.CONF_HEADERS] = safe_headers
+            safe_headers: dict[str, str] = {str(k)[:64]: str(v)[:256] for k, v in headers.items()}
+            config[CONF_HEADERS] = safe_headers
+
+        # params
+        if (CONF_PARAMS in arguments) or ("params" in arguments):
+            params = arguments.get(CONF_PARAMS, arguments.get("params"))
+            if not isinstance(params, dict):
+                raise HomeAssistantError("REST params must be an object of strings.")
+            config[CONF_PARAMS] = {str(k): str(v) for k, v in params.items()}
 
         if (payload := arguments.get("payload")) is not None:
             payload_str = str(payload)
@@ -642,7 +793,14 @@ class RestFunctionExecutor(FunctionExecutor):
                 raise HomeAssistantError("REST payload exceeds 8KB limit.")
             config[CONF_PAYLOAD] = payload_str
 
-        config.setdefault(CONF_TIMEOUT, min(15, config.get(CONF_TIMEOUT, 10)))
+        # timeout
+        if (CONF_TIMEOUT in arguments) or ("timeout" in arguments):
+            try:
+                config[CONF_TIMEOUT] = int(arguments.get(CONF_TIMEOUT, arguments.get("timeout")))
+            except Exception as exc:
+                raise HomeAssistantError("timeout must be an integer") from exc
+        else:
+            config.setdefault(CONF_TIMEOUT, min(15, config.get(CONF_TIMEOUT, 10)))
         config.setdefault(CONF_VERIFY_SSL, True)
 
         # REST helper mirrors https://www.home-assistant.io/integrations/rest/
@@ -675,6 +833,43 @@ class ScrapeFunctionExecutor(FunctionExecutor):
             )
         )
 
+    def to_arguments(self, arguments):
+        """Normalize friendly keys (url, select, attr, index) to COMBINED_SCHEMA.
+
+        Friendly keys are mapped before validation so LLM calls don't fail early.
+        Verified against HA scrape integration (selector/attribute/index semantics).
+        """
+        mapped = dict(arguments)
+        # url → resource
+        url = mapped.pop("url", mapped.get(CONF_RESOURCE))
+        if url is None:
+            raise vol.Invalid("Scrape tool requires a 'url'")
+        if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
+            raise vol.Invalid("Scrape tool requires a 'url' (http/https)")
+        mapped[CONF_RESOURCE] = url
+
+        # Build sensor list from friendly keys if absent
+        if "sensor" not in mapped:
+            select = mapped.pop("select", None)
+            if not isinstance(select, str) or not select.strip():
+                raise vol.Invalid("Scrape tool requires a 'select' CSS selector")
+            idx = mapped.pop("index", 0)
+            try:
+                idx = int(idx)
+            except Exception as exc:
+                raise vol.Invalid("index must be an integer") from exc
+            idx = max(0, min(idx, SCRAPE_SAFE_MAX_INDEX))
+            sensor_cfg = {
+                scrape.const.CONF_SELECT: select.strip(),
+                scrape.const.CONF_INDEX: idx,
+            }
+            attr = mapped.pop("attr", mapped.pop("attribute", None))
+            if attr is not None:
+                sensor_cfg[CONF_ATTRIBUTE] = str(attr)
+            mapped["sensor"] = [sensor_cfg]
+
+        return self.data_schema(mapped)
+
     async def execute(
         self,
         hass: HomeAssistant,
@@ -697,6 +892,9 @@ class ScrapeFunctionExecutor(FunctionExecutor):
             raise HomeAssistantError("Scrape tool requires a 'url' argument.")
 
         sensor_configs = [dict(sensor) for sensor in config.get("sensor", [])]
+        # Prefer normalized sensors from to_arguments if present
+        if not sensor_configs and isinstance(arguments.get("sensor"), list):
+            sensor_configs = [dict(s) for s in arguments["sensor"]]
         def _coerce_index(value: Any) -> int:
             if value in (None, ""):
                 return 0
