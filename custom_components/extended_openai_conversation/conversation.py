@@ -2,24 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
-from typing import Any, Optional, Literal
+from typing import Any, Literal, Optional
 
+from homeassistant.components import conversation as conv
 from homeassistant.components.conversation import (
+    AssistantContent,
+    ChatLog,
     ConversationEntity,
     ConversationEntityFeature,
-    ChatLog,
 )
 from homeassistant.helpers import intent
 from homeassistant.const import CONF_API_KEY
+from homeassistant.helpers.llm import ToolInput
+from openai._exceptions import OpenAIError
 
 # Try to import the real ConversationResult; otherwise provide a compatible shim.
 try:
-    from homeassistant.components.conversation.agent import ConversationResult  # type: ignore[attr-defined]
+    # Prefer modern path (HA 2024.8+): models.ConversationResult
+    from homeassistant.components.conversation.models import ConversationResult  # type: ignore[attr-defined]
 except Exception:
     try:
-        from homeassistant.components.conversation import agent as _agent_mod  # type: ignore[attr-defined]
-        ConversationResult = _agent_mod.ConversationResult  # type: ignore[assignment]
+        # Legacy fallback used by older cores
+        from homeassistant.components.conversation.agent import ConversationResult  # type: ignore[attr-defined]
     except Exception:
 
         class ConversationResult:  # type: ignore[misc]
@@ -57,7 +64,11 @@ from .const import (
     MODEL_STRATEGY_FORCE_RESPONSES,
 )
 from .model_capabilities import detect_model_capabilities
-from .responses_adapter import response_text_from_responses_result
+from .responses_adapter import (
+    response_text_from_responses_result,
+    extract_function_calls_from_response,
+)
+from .tools_orchestrator import ToolsOrchestrator, ToolExecutionError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -76,6 +87,8 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
     def __init__(self, hass, entry) -> None:
         self.hass = hass
         self.entry = entry
+        self._logged_minimal_effort = False
+        self._preferred_web_search_type: Optional[str] = None
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -96,6 +109,9 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         self, user_input: Any, chat_log: ChatLog
     ) -> ConversationResult:
         """Handle a message from Assist."""
+        # ConversationEntity contract documented in
+        # homeassistant.components.conversation (2024.12): _async_handle_message
+        # receives (ConversationInput, ChatLog) and returns ConversationResult.
         # Lazy import avoids SDK import at module load
         from .openai_support import build_async_client
 
@@ -124,8 +140,20 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
         _LOGGER.debug(
             "EOC: model=%s caps=%s strategy=%s use_responses=%s",
-            model, caps, strategy, use_responses
+            model,
+            caps,
+            strategy,
+            use_responses,
         )
+
+        agent_id = user_input.agent_id or self.entity_id or DOMAIN
+        orchestrator = ToolsOrchestrator(
+            self.hass,
+            options=options,
+            chat_log=chat_log,
+            agent_id=agent_id,
+        )
+        orchestrator.reset()
 
         client = build_async_client(
             self.hass,
@@ -139,77 +167,66 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         user_text = user_input.text
 
         if use_responses:
-            # ✅ Correct Responses API schema:
-            # - System instructions go into "instructions"
-            # - Input content items use type "input_text"
-            payload: dict[str, Any] = {
-                "model": model,
-                "input": [
-                    {
-                        "role": "user",
-                        "content": [{"type": "input_text", "text": user_text}],
-                    }
-                ],
-            }
-            if sys_prompt:
-                payload["instructions"] = sys_prompt
-
-            max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
-            if max_tokens > 0:
-                payload["max_output_tokens"] = max_tokens
-
-            if caps.is_reasoning:
-                effort = options.get(CONF_REASONING_EFFORT)
-                # OpenAI 1.x expects nested object: {"reasoning": {"effort": "low|medium|high|minimal"}}
-                payload["reasoning"] = {"effort": effort}
-
             try:
-                result = await client.responses.create(**payload)  # type: ignore[arg-type]
-                text = response_text_from_responses_result(result)
-                cont = _should_continue(text)
-                return _ok(
-                    text=text,
-                    language=user_input.language,
-                    conversation_id=user_input.conversation_id,
-                    cont=cont,
+                responses_result = await self._run_responses_flow(
+                    client=client,
+                    model=model,
+                    sys_prompt=sys_prompt,
+                    user_text=user_text,
+                    options=options,
+                    caps=caps,
+                    user_input=user_input,
+                    orchestrator=orchestrator,
+                    chat_log=chat_log,
+                    agent_id=agent_id,
                 )
-            except Exception as err:
+            except ToolExecutionError as err:
+                _LOGGER.warning("Responses tool failure: %s", err)
+                return _err(str(err), user_input.language)
+            except Exception as err:  # pragma: no cover - defensive guard
                 _LOGGER.exception("Responses API failure: %s", err)
                 return _err(str(err), user_input.language)
 
-        # Fallback: Chat Completions
-        messages = []
-        if sys_prompt:
-            messages.append({"role": "system", "content": sys_prompt})
-        messages.append({"role": "user", "content": user_text})
-
-        kwargs: dict[str, Any] = {"model": model, "messages": messages}
-
-        max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
-        if max_tokens > 0:
-            # Some reasoning-capable chat models use max_completion_tokens
-            kwargs["max_completion_tokens" if caps.is_reasoning else "max_tokens"] = max_tokens
-
-        if caps.accepts_temperature:
-            if (t := options.get(CONF_TEMPERATURE)) is not None:
-                kwargs["temperature"] = float(t)
-            if (p := options.get(CONF_TOP_P)) is not None:
-                kwargs["top_p"] = float(p)
-
-        try:
-            result = await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
-            msg = result.choices[0].message
-            text = msg.content or ""
+            text = response_text_from_responses_result(responses_result)
             cont = _should_continue(text)
+            self._log_final_assistant_message(chat_log, agent_id, text)
             return _ok(
                 text=text,
                 language=user_input.language,
                 conversation_id=user_input.conversation_id,
                 cont=cont,
             )
-        except Exception as err:
+
+        orchestrator.configure_chat_web_search(model)
+
+        try:
+            text = await self._run_chat_flow(
+                client=client,
+                model=model,
+                sys_prompt=sys_prompt,
+                user_text=user_text,
+                options=options,
+                caps=caps,
+                user_input=user_input,
+                orchestrator=orchestrator,
+                chat_log=chat_log,
+                agent_id=agent_id,
+            )
+        except ToolExecutionError as err:
+            _LOGGER.warning("Chat tool failure: %s", err)
+            return _err(str(err), user_input.language)
+        except Exception as err:  # pragma: no cover
             _LOGGER.exception("Chat Completions failure: %s", err)
             return _err(str(err), user_input.language)
+
+        cont = _should_continue(text)
+        self._log_final_assistant_message(chat_log, agent_id, text)
+        return _ok(
+            text=text,
+            language=user_input.language,
+            conversation_id=user_input.conversation_id,
+            cont=cont,
+        )
 
     def _default_options(self) -> dict[str, Any]:
         return {
@@ -224,6 +241,468 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
             CONF_REASONING_EFFORT: self.entry.options.get(CONF_REASONING_EFFORT, "medium"),
             "prompt": self.entry.options.get("prompt", DEFAULT_PROMPT),
         }
+
+    async def _run_responses_flow(
+        self,
+        *,
+        client,
+        model: str,
+        sys_prompt: str,
+        user_text: str,
+        options: dict[str, Any],
+        caps,
+        user_input,
+        orchestrator: ToolsOrchestrator,
+        chat_log: ChatLog,
+        agent_id: str,
+    ):
+        payload: dict[str, Any] = {
+            "model": model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": user_text}],
+                }
+            ],
+        }
+
+        if sys_prompt:
+            payload["instructions"] = sys_prompt
+
+        max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
+        if max_tokens > 0:
+            payload["max_output_tokens"] = max_tokens
+
+        if caps.is_reasoning:
+            effort = options.get(CONF_REASONING_EFFORT)
+            if effort:
+                if (
+                    effort == "minimal"
+                    and not _model_supports_minimal_reasoning(model)
+                ):
+                    if not self._logged_minimal_effort:
+                        _LOGGER.debug(
+                            "Reasoning effort 'minimal' not supported for model %s; "
+                            "downgrading to 'low'.",
+                            model or "<unknown>",
+                        )
+                        self._logged_minimal_effort = True
+                    effort = "low"
+                payload["reasoning"] = {"effort": effort}
+
+        tools = orchestrator.conversation_tools_for_responses(
+            self.hass,
+            model=model,
+            tool_type_override=self._preferred_web_search_type,
+        )
+        if tools:
+            payload["tools"] = tools
+
+        # Responses API expects tool continuations via function_call_output entries:
+        # https://platform.openai.com/docs/api-reference/responses/create
+        try:
+            result = await client.responses.create(**payload)
+        except OpenAIError as err:
+            fallback_type = orchestrator.web_search_fallback_type
+            current_type = orchestrator.web_search_tool_type
+            if (
+                current_type
+                and fallback_type
+                and _should_retry_web_search(current_type, str(err))
+            ):
+                # Some tenants still expose 'web_search_preview'; retry gracefully.
+                _LOGGER.debug(
+                    "Web search tool type '%s' rejected; retrying with '%s'.",
+                    current_type,
+                    fallback_type,
+                )
+                payload["tools"] = self._swap_web_search_tool_type(
+                    payload.get("tools", []), current_type, fallback_type
+                )
+                orchestrator.update_web_search_tool_type(fallback_type)
+                self._preferred_web_search_type = fallback_type
+                result = await client.responses.create(**payload)
+            else:
+                raise
+        return await self._handle_responses_tool_calls(
+            client=client,
+            model=model,
+            result=result,
+            orchestrator=orchestrator,
+            user_input=user_input,
+            chat_log=chat_log,
+            agent_id=agent_id,
+        )
+
+    async def _handle_responses_tool_calls(
+        self,
+        *,
+        client,
+        model: str,
+        result,
+        orchestrator: ToolsOrchestrator,
+        user_input,
+        chat_log: ChatLog,
+        agent_id: str,
+    ):
+        depth = 0
+
+        while True:
+            calls = extract_function_calls_from_response(result)
+            if not calls:
+                _LOGGER.debug(
+                    "Responses loop depth %s: no tool calls returned; exiting.",
+                    depth,
+                )
+                return result
+
+            _LOGGER.debug(
+                "Responses loop depth %s: received %d call(s): %s",
+                depth,
+                len(calls),
+                [self._normalize_tool_call(call)[1] for call in calls],
+            )
+
+            outputs: list[dict[str, Any]] = []
+            if depth >= orchestrator.max_chain_depth:
+                _LOGGER.debug(
+                    "Responses tool loop stopped at depth %s (limit %s)",
+                    depth,
+                    orchestrator.max_chain_depth,
+                )
+                for idx, call in enumerate(calls):
+                    call_id = call.get("call_id") or call.get("id") or str(idx)
+                    outputs.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": "Tool execution halted: maximum depth reached.",
+                        }
+                    )
+                result = await client.responses.create(
+                    model=model,
+                    previous_response_id=getattr(result, "id", None),
+                    input=outputs,
+                )
+                return result
+
+            self._log_assistant_tool_calls(chat_log, agent_id, None, calls)
+
+            for call in calls:
+                name = call.get("name")
+                arguments = call.get("arguments")
+                call_id = call.get("call_id") or call.get("id") or name
+                if not name:
+                    continue
+                _LOGGER.debug(
+                    "Calling tool '%s' via Responses (call_id=%s)",
+                    name,
+                    call_id,
+                )
+                try:
+                    output = await orchestrator.execute_tool_call(
+                        name=name,
+                        arguments=arguments,
+                        user_input=user_input,
+                        call_id=call_id,
+                    )
+                except ToolExecutionError as err:
+                    output = f"Tool {name} failed: {err}"
+                    _LOGGER.debug(
+                        "Tool '%s' execution returned error via Responses: %s",
+                        name,
+                        err,
+                    )
+
+                outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call_id or (name or "unknown"),
+                        "output": output,
+                    }
+                )
+                _LOGGER.debug(
+                    "Appending function_call_output for call_id=%s",
+                    call_id or name,
+                )
+
+            if not outputs:
+                _LOGGER.debug(
+                    "Responses loop depth %s produced no outputs; returning.",
+                    depth,
+                )
+                return result
+
+            prev_id = getattr(result, "id", None)
+            call_ids = [output["call_id"] for output in outputs]
+            _LOGGER.debug(
+                "Posting function_call_output for call_id(s) %s with previous_response_id=%s.",
+                call_ids,
+                prev_id,
+            )
+            result = await client.responses.create(
+                model=model,
+                previous_response_id=prev_id,
+                input=outputs,
+            )
+            _LOGGER.debug(
+                "Submitted %d function_call_output payload(s); continuing Responses loop.",
+                len(outputs),
+            )
+            depth += 1
+
+    async def _run_chat_flow(
+        self,
+        *,
+        client,
+        model: str,
+        sys_prompt: str,
+        user_text: str,
+        options: dict[str, Any],
+        caps,
+        user_input,
+        orchestrator: ToolsOrchestrator,
+        chat_log: ChatLog,
+        agent_id: str,
+    ) -> str:
+        messages: list[dict[str, Any]] = []
+        if sys_prompt:
+            messages.append({"role": "system", "content": sys_prompt})
+        messages.append({"role": "user", "content": user_text})
+
+        kwargs: dict[str, Any] = {"model": model, "messages": messages}
+
+        max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
+        if max_tokens > 0:
+            # OpenAI Chat Completions accepts 'max_tokens' for budget control:
+            # https://platform.openai.com/docs/api-reference/chat/create
+            kwargs["max_tokens"] = max_tokens
+
+        if caps.accepts_temperature:
+            if (t := options.get(CONF_TEMPERATURE)) is not None:
+                kwargs["temperature"] = float(t)
+            if (p := options.get(CONF_TOP_P)) is not None:
+                kwargs["top_p"] = float(p)
+
+        tools = orchestrator.conversation_tools_for_chat()
+        if tools:
+            kwargs["tools"] = tools
+
+        depth = 0
+        while True:
+            completion = await client.chat.completions.create(**kwargs)
+            message = completion.choices[0].message
+            content = message.content or ""
+            tool_calls = getattr(message, "tool_calls", None) or []
+
+            if not tool_calls:
+                _LOGGER.debug(
+                    "Chat loop depth %s: no tool calls; returning assistant message.",
+                    depth,
+                )
+                return content
+
+            _LOGGER.debug(
+                "Chat loop depth %s: received %d tool call(s): %s",
+                depth,
+                len(tool_calls),
+                [self._normalize_tool_call(call)[1] for call in tool_calls],
+            )
+
+            if depth >= orchestrator.max_chain_depth:
+                suffix = "Tool chain limit reached; unable to continue."
+                _LOGGER.debug(
+                    "Chat tool loop stopped at depth %s (limit %s)",
+                    depth,
+                    orchestrator.max_chain_depth,
+                )
+                return f"{content}\n{suffix}" if content else suffix
+
+            self._log_assistant_tool_calls(chat_log, agent_id, content, tool_calls)
+
+            assistant_entry = {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [
+                    call.model_dump() if hasattr(call, "model_dump") else {
+                        "id": getattr(call, "id", None),
+                        "type": getattr(call, "type", "function"),
+                        "function": {
+                            "name": getattr(getattr(call, "function", None), "name", None),
+                            "arguments": getattr(
+                                getattr(call, "function", None), "arguments", "{}"
+                            ),
+                        },
+                    }
+                    for call in tool_calls
+                ],
+            }
+            messages.append(assistant_entry)
+
+            for call in tool_calls:
+                call_id = getattr(call, "id", None)
+                func = getattr(call, "function", None)
+                call_name = getattr(func, "name", None)
+                call_arguments = getattr(func, "arguments", "{}")
+                if not call_name:
+                    continue
+                _LOGGER.debug(
+                    "Calling tool '%s' via Chat Completions (call_id=%s)",
+                    call_name,
+                    call_id,
+                )
+                try:
+                    output = await orchestrator.execute_tool_call(
+                        name=call_name,
+                        arguments=call_arguments,
+                        user_input=user_input,
+                        call_id=call_id,
+                    )
+                except ToolExecutionError as err:
+                    output = f"Tool {call_name} failed: {err}"
+                    _LOGGER.debug(
+                        "Tool '%s' execution returned error via Chat Completions: %s",
+                        call_name,
+                        err,
+                    )
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": output,
+                    }
+                )
+                _LOGGER.debug(
+                    "Appended tool result message for call_id=%s",
+                    call_id,
+                )
+
+            kwargs["messages"] = messages
+            _LOGGER.debug(
+                "Continuing Chat tool loop with %d accumulated messages.",
+                len(messages),
+            )
+            depth += 1
+
+    def _log_assistant_tool_calls(
+        self,
+        chat_log: ChatLog | None,
+        agent_id: str,
+        content: str | None,
+        tool_calls: list[Any],
+    ) -> None:
+        if not chat_log or not tool_calls:
+            return
+
+        tool_inputs: list[ToolInput] = []
+        for call in tool_calls:
+            call_id, call_name, args = self._normalize_tool_call(call)
+            if not call_name:
+                continue
+            tool_inputs.append(
+                ToolInput(
+                    tool_name=call_name,
+                    tool_args=args,
+                    id=call_id or call_name,
+                    external=True,
+                )
+            )
+
+        if not tool_inputs:
+            return
+
+        chat_log.async_add_assistant_content_without_tools(
+            AssistantContent(
+                agent_id=agent_id,
+                content=content if content else None,
+                tool_calls=tool_inputs,
+            )
+        )
+
+    def _normalize_tool_call(
+        self, call: Any
+    ) -> tuple[Optional[str], Optional[str], dict[str, Any]]:
+        call_id: Optional[str] = None
+        name: Optional[str] = None
+        raw_args: Any = None
+
+        if hasattr(call, "id") or hasattr(call, "function"):
+            call_id = getattr(call, "id", None)
+            func = getattr(call, "function", None)
+            name = getattr(func, "name", None)
+            raw_args = getattr(func, "arguments", None)
+        elif isinstance(call, dict):
+            call_id = call.get("id") or call.get("call_id")
+            if (func := call.get("function")) and isinstance(func, dict):
+                name = func.get("name")
+                raw_args = func.get("arguments")
+            else:
+                name = call.get("name")
+                raw_args = call.get("arguments")
+
+        return call_id, name, self._parse_tool_arguments(raw_args)
+
+    @staticmethod
+    def _parse_tool_arguments(raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict):
+            return raw
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return {"raw": raw}
+            if isinstance(parsed, dict):
+                return parsed
+            return {"value": parsed}
+        if raw is None:
+            return {}
+        return {"value": raw}
+
+    def _log_final_assistant_message(
+        self, chat_log: ChatLog | None, agent_id: str, text: str
+    ) -> None:
+        if not chat_log:
+            return
+        chat_log.async_add_assistant_content_without_tools(
+            AssistantContent(agent_id=agent_id, content=text or "")
+        )
+
+    @staticmethod
+    def _swap_web_search_tool_type(
+        tools: list[dict[str, Any]], current_type: str, new_type: str
+    ) -> list[dict[str, Any]]:
+        swapped: list[dict[str, Any]] = []
+        for tool in tools:
+            if tool.get("type") == current_type:
+                updated = dict(tool)
+                updated["type"] = new_type
+                swapped.append(updated)
+            else:
+                swapped.append(tool)
+        _LOGGER.debug(
+            "Registered hosted web search tool using type '%s'.",
+            new_type,
+        )
+        return swapped
+
+
+def _model_supports_minimal_reasoning(model: Optional[str]) -> bool:
+    """Return True if the target model advertises 'minimal' reasoning effort.
+
+    GPT-5 family models document the 'minimal' effort; other endpoints generally
+    only accept 'low'|'medium'|'high' (see OpenAI Responses API docs).
+    """
+    if not model:
+        return False
+    name = model.lower()
+    return name.startswith("gpt-5")
+
+
+def _should_retry_web_search(current_type: str, error_text: str) -> bool:
+    """Detect tool-type errors so we can retry with the preview variant."""
+    lowered = error_text.lower()
+    return current_type in lowered and "web_search" in lowered
 
 
 def _ok(*, text: str, language: Optional[str], conversation_id: Optional[str], cont: bool) -> ConversationResult:

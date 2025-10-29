@@ -20,6 +20,10 @@ A maintained fork of **Extended OpenAI Conversation** for **Home Assistant** tha
 - **Options gear** (model, strategy, effort, max tokens, temp/top‑p, prompt) via `OptionsFlowWithReload`  
 - **Azure OpenAI** support (Base URL + API version)  
 - **Async‑safe client** using HA’s shared HTTPX to avoid blocking SSL CA loads
+- **Toolbox parity** with upstream (service execution, automations, history, REST/scrape/script/template/composite when configured)
+- **Hosted web search** hook for reasoning models with graceful chat fallback
+- **Optional MCP bridge** (lazy import; safe no-op when library absent)
+- **Tool execution limits** (per-call timeout, depth/call caps, chat log breadcrumbs for start/result)
 
 ## Requirements
 - Home Assistant **2025.4.0+** recommended  
@@ -36,9 +40,59 @@ A maintained fork of **Extended OpenAI Conversation** for **Home Assistant** tha
 Open the integration card → **Configure** (gear):
 - **Model** (default `gpt-5`)  
 - **Model strategy**: `auto` \| `force_chat_completions` \| `force_responses_api`  
-- **Use Responses API** (for non‑reasoning models when strategy is `auto`)  
+- **Use Responses API** (for non-reasoning models when strategy is `auto`)  
 - **Reasoning effort**: `minimal` \| `low` \| `medium` \| `high`  
 - **Max tokens**, **Temperature**, **Top‑p**, **System prompt**
+- **Functions YAML**: list of tool specs (defaults cover service/automations/history); extend to add REST/scrape/script/template/composite entries.
+- **Tool limits**: max tool calls/iterations, per-call timeout, response size cap.
+- **Web search**: enable hosted search, context size (`small`/`medium`/`large` or raw token budget), optional approximate location sharing.
+- **MCP bridge**: toggles + timeout/payload caps (requires [`mcp`](https://pypi.org/project/mcp/) to expose external tools).
+
+### Toolbox
+- Default toolbox exposes `execute_service`, `add_automation`, and `get_history`
+- Extend via **Functions YAML** in options. Each entry:
+
+```yaml
+- spec:
+    name: rest_weather
+    description: Fetch the daily forecast from the weather API.
+    parameters:
+      type: object
+      properties:
+        city:
+          type: string
+  function:
+    type: rest
+    resource: https://api.example.com/forecast
+    method: GET
+    headers:
+      Authorization: "{{ secrets.weather_token }}"
+    payload_template: "{{ {'city': city} | tojson }}"
+```
+
+- `scrape` tool lazily imports `beautifulsoup4` (installed via manifest); if import fails at runtime the tool returns a friendly error without breaking the integration.
+- Tool calls are capped per turn and per loop, with start/result breadcrumbs logged to the Assist chat log for auditability.
+
+### Web search
+- When `Enable hosted web search` is on, reasoning paths send the official `web_search` tool.
+- Context size accepts `small`/`medium`/`large` or an integer budget (auto-mapped to low/medium/high).
+- Optionally share approximate location (city/region/country/timezone) using HA config data.
+- Chat Completions log a notice when the selected model lacks hosted search support and continue without failing.
+
+### MCP bridge
+- Disabled by default; toggle **Enable MCP bridge** to attempt discovery via the optional [`mcp`](https://pypi.org/project/mcp/) SDK.
+- When the SDK is unavailable the bridge is a no-op. Future releases can hook into `MCPBridge` for richer behaviour.
+- Timeout and payload caps prevent runaway external tool calls.
+
+## Manual validation checklist
+- Base conversation returns `ConversationResult` with language, `response_type`, and `continue_conversation` populated.
+- `execute_service` honours Assist exposure; non-exposed entities return a readable denial.
+- `get_history` responds with a concise summary (≤10 entries per entity).
+- `rest` and `scrape` enforce per-call timeout/output caps; missing `beautifulsoup4` yields a graceful error.
+- `composite` chains respect the orchestrator depth limit (safe failure message).
+- Web search works end-to-end on reasoning models and logs a skip message on unsupported chat models.
+- MCP bridge disabled → no change; when enabled (with SDK) tool discovery/execution routes through the orchestrator.
+- Tool start/result breadcrumbs appear in the HA chat log for traceability.
 
 ### Recommended (long, smart chats)
 - Model: `gpt-5`  

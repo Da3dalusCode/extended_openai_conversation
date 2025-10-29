@@ -38,9 +38,29 @@
           "temperature": "Temperature (chat models only)",
           "top_p": "Top‑p (chat models only)",
           "max_tokens": "Max tokens",
-          "prompt": "System prompt"
+          "prompt": "System prompt",
+          "functions_yaml": "Functions YAML",
+          "max_tool_calls": "Max tool calls per turn",
+          "max_tool_chain": "Max tool iterations",
+          "tool_timeout": "Tool timeout (seconds)",
+          "tool_max_output_chars": "Tool output cap (characters)",
+          "enable_web_search": "Enable hosted web search",
+          "web_search_context_size": "Web search context size",
+          "include_home_location": "Share approximate Home Assistant location",
+          "enable_mcp": "Enable MCP bridge",
+          "mcp_timeout": "MCP tool timeout (seconds)",
+          "mcp_max_payload": "MCP payload cap (bytes)"
+        },
+        "error": {
+          "invalid_functions_yaml": "Functions YAML is invalid. Provide a list of specs with 'spec' and 'function'."
         }
       }
     }
+  },
+  "errors": {
+    "rest_url_required": "REST tool requires a 'url' (http/https)",
+    "scrape_requirements": "Scrape tool requires a 'url' and 'select'",
+    "template_required": "Template tool requires a 'template' or 'value_template'",
+    "exposure_denied": "Some targets are hidden from Assist: {entities}"
   }
 }
