@@ -212,7 +212,7 @@ class FunctionExecutor(ABC):
         missing = set(entity_ids) - exposed_entity_ids
         if missing:
             # Exposure follows Assist's 'conversation' assistant toggle (see
-            # homeassistant.helpers.exposed_entities.async_should_expose).
+            # homeassistant.components.homeassistant.exposed_entities.async_should_expose).
             _LOGGER.debug(
                 "Exposure denied for assistant='conversation', entities=%s",
                 sorted(missing),
@@ -312,7 +312,7 @@ class NativeFunctionExecutor(FunctionExecutor):
         # If no entity_id but area_id/device_id is provided, resolve targets and enforce exposure
         if not entity_id and (area_id or device_id):
             from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er  # lazy import
-            from homeassistant.helpers.exposed_entities import async_should_expose
+            from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 
             def _as_list(x):
                 if x is None:
