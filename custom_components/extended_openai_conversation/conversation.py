@@ -21,10 +21,12 @@ from openai._exceptions import OpenAIError
 
 # Try to import the real ConversationResult; otherwise provide a compatible shim.
 try:
-    from homeassistant.components.conversation.agent import ConversationResult  # type: ignore[attr-defined]
+    # Prefer modern path (HA 2024.8+): models.ConversationResult
+    from homeassistant.components.conversation.models import ConversationResult  # type: ignore[attr-defined]
 except Exception:
     try:
-        ConversationResult = conv.agent.ConversationResult  # type: ignore[assignment]
+        # Legacy fallback used by older cores
+        from homeassistant.components.conversation.agent import ConversationResult  # type: ignore[attr-defined]
     except Exception:
 
         class ConversationResult:  # type: ignore[misc]

@@ -171,17 +171,26 @@ DEFAULT_FUNCTIONS: list[dict[str, object]] = [
                     },
                     "method": {
                         "type": "string",
-                        "enum": ["GET", "POST", "PUT", "PATCH"],
-                        "description": "Optional HTTP method (default GET).",
+                        "enum": ["GET", "POST"],
+                        "description": "HTTP method (default GET).",
                     },
                     "headers": {
                         "type": "object",
                         "additionalProperties": {"type": "string"},
                         "description": "Optional request headers.",
                     },
-                    "payload": {
+                    "params": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Optional query parameters.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Optional timeout in seconds (default 10).",
+                    },
+                    "body": {
                         "type": "string",
-                        "description": "Optional request body for write methods.",
+                        "description": "Optional request body for POST.",
                     },
                 },
                 "required": ["url"],
