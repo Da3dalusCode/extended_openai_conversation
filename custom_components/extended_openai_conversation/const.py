@@ -158,6 +158,126 @@ DEFAULT_FUNCTIONS: list[dict[str, object]] = [
         },
         "function": {"type": "native", "name": "get_history"},
     },
+    {
+        "spec": {
+            "name": "rest",
+            "description": "Perform an HTTP request via Home Assistant's REST data helper.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP or HTTPS endpoint to query.",
+                    },
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "POST", "PUT", "PATCH"],
+                        "description": "Optional HTTP method (default GET).",
+                    },
+                    "headers": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                        "description": "Optional request headers.",
+                    },
+                    "payload": {
+                        "type": "string",
+                        "description": "Optional request body for write methods.",
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+        "function": {"type": "rest"},
+    },
+    {
+        "spec": {
+            "name": "scrape",
+            "description": "Scrape structured text from a web page using a CSS selector.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP or HTTPS page to scrape.",
+                    },
+                    "select": {
+                        "type": "string",
+                        "description": "CSS selector that locates the desired node.",
+                    },
+                    "attribute": {
+                        "type": "string",
+                        "description": "Optional attribute to read instead of text content.",
+                    },
+                    "index": {
+                        "type": "integer",
+                        "description": "Zero-based index when the selector matches multiple nodes.",
+                    },
+                },
+                "required": ["url", "select"],
+            },
+        },
+        "function": {"type": "scrape"},
+    },
+    {
+        "spec": {
+            "name": "script",
+            "description": "Execute a Home Assistant script sequence or script entity.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sequence": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Home Assistant script steps to run.",
+                    },
+                    "entity_id": {
+                        "type": "string",
+                        "description": "Existing script entity to run if no sequence is provided.",
+                    },
+                },
+            },
+        },
+        "function": {"type": "script"},
+    },
+    {
+        "spec": {
+            "name": "template",
+            "description": "Render a Home Assistant template with the provided arguments.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "template": {
+                        "type": "string",
+                        "description": "Template string to render.",
+                    },
+                    "parse_json": {
+                        "type": "boolean",
+                        "description": "Parse the rendered template as JSON when true.",
+                    },
+                },
+                "required": ["template"],
+            },
+        },
+        "function": {"type": "template"},
+    },
+    {
+        "spec": {
+            "name": "composite",
+            "description": "Run multiple tools sequentially, sharing variables between them.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "sequence": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "List of tool invocations to execute in order.",
+                    },
+                },
+                "required": ["sequence"],
+            },
+        },
+        "function": {"type": "composite"},
+    },
 ]
 DEFAULT_FUNCTIONS_RAW = ""
 DEFAULT_MAX_TOOL_CALLS = 4

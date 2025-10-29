@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, NamedTuple
 
 from homeassistant.core import HomeAssistant
 
@@ -17,6 +17,12 @@ from .const import (
 from .model_capabilities import detect_model_capabilities
 
 LOGGER = logging.getLogger(__name__)
+
+
+class WebSearchToolSpec(NamedTuple):
+    payload: Dict[str, Any]
+    fallback_type: str | None
+
 
 _CONTEXT_ALIASES = {
     "small": "low",
@@ -81,8 +87,12 @@ def _model_supports_hosted_search(model: str | None) -> bool:
 
 
 def build_responses_web_search_tool(
-    hass: HomeAssistant, options: dict[str, Any], *, model: str | None
-) -> dict[str, Any] | None:
+    hass: HomeAssistant,
+    options: dict[str, Any],
+    *,
+    model: str | None,
+    tool_type_override: str | None = None,
+) -> WebSearchToolSpec | None:
     """Return Responses API tool payload for hosted web search if enabled."""
 
     if not options.get(CONF_ENABLE_WEB_SEARCH, DEFAULT_ENABLE_WEB_SEARCH):
@@ -97,8 +107,13 @@ def build_responses_web_search_tool(
     context_size = _normalize_context_size(
         options.get(CONF_WEB_SEARCH_CONTEXT_SIZE, DEFAULT_WEB_SEARCH_CONTEXT_SIZE)
     )
-    tool: dict[str, Any] = {
-        "type": "web_search",
+    tool_type = tool_type_override or "web_search"
+    # OpenAI may expose the legacy 'web_search_preview' type for older tenants;
+    # prefer 'web_search' and fall back if the API rejects it (see
+    # https://platform.openai.com/docs/assistants/tools/web-search).
+    fallback_type = None if tool_type != "web_search" else "web_search_preview"
+    tool: Dict[str, Any] = {
+        "type": tool_type,
         "search_context_size": context_size,
     }
 
@@ -107,11 +122,11 @@ def build_responses_web_search_tool(
             tool["user_location"] = location
 
     LOGGER.debug(
-        "Web search tool enabled for model '%s' with context '%s'",
+        "Hosted web search enabled for model=%s using tool type '%s'.",
         model or "<unknown>",
-        tool["search_context_size"],
+        tool_type,
     )
-    return tool
+    return WebSearchToolSpec(tool, fallback_type)
 
 
 def configure_chat_completion_web_search(

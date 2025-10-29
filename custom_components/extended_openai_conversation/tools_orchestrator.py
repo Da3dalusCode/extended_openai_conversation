@@ -78,9 +78,13 @@ class ToolsOrchestrator:
         self._chain_depth = 0
         self._started = time.monotonic()
         self._exposed_entities: list[dict[str, Any]] | None = None
+        self._exposed_entities_expires: float | None = None
 
         self._tool_specs: list[dict[str, Any]] = []
         self._runtime_map: dict[str, dict[str, Any]] = {}
+
+        self._web_search_tool_type: str | None = None
+        self._web_search_fallback_type: str | None = None
 
         self._load_builtin_functions(options.get(CONF_FUNCTIONS, DEFAULT_FUNCTIONS))
         self._memory_enabled = options.get(CONF_MEMORY_ENABLED, DEFAULT_MEMORY_ENABLED)
@@ -143,16 +147,28 @@ class ToolsOrchestrator:
         ]
 
     def conversation_tools_for_responses(
-        self, hass: HomeAssistant, model: str | None
+        self,
+        hass: HomeAssistant,
+        *,
+        model: str | None,
+        tool_type_override: str | None = None,
     ) -> list[dict[str, Any]]:
         tools = [
             {"type": "function", "function": dict(spec)}
             for spec in self._tool_specs
         ]
-        if web_search := build_responses_web_search_tool(
-            hass, self.options, model=model
+        self._web_search_tool_type = None
+        self._web_search_fallback_type = None
+        if tool_spec := build_responses_web_search_tool(
+            hass,
+            self.options,
+            model=model,
+            tool_type_override=tool_type_override,
         ):
-            tools.append(web_search)
+            payload, fallback_type = tool_spec
+            self._web_search_tool_type = payload.get("type")
+            self._web_search_fallback_type = fallback_type
+            tools.append(payload)
         return tools
 
     def configure_chat_web_search(self, model: str | None) -> None:
@@ -166,6 +182,9 @@ class ToolsOrchestrator:
         self._chain_depth = 0
         self._started = time.monotonic()
         self._exposed_entities = None
+        self._exposed_entities_expires = None
+        self._web_search_tool_type = None
+        self._web_search_fallback_type = None
 
     @property
     def max_chain_depth(self) -> int:
@@ -189,7 +208,12 @@ class ToolsOrchestrator:
             raise ToolExecutionError("Tool chain time budget exceeded")
 
     def _get_exposed_entities(self) -> list[dict[str, Any]]:
-        if self._exposed_entities is not None:
+        now = time.monotonic()
+        if (
+            self._exposed_entities is not None
+            and self._exposed_entities_expires is not None
+            and now < self._exposed_entities_expires
+        ):
             return self._exposed_entities
 
         exposed: list[dict[str, Any]] = []
@@ -205,6 +229,8 @@ class ToolsOrchestrator:
                     }
                 )
         self._exposed_entities = exposed
+        # Expose settings may change from the UI at runtime; refresh every 5 minutes.
+        self._exposed_entities_expires = now + 300
         return exposed
 
     def _stringify_result(self, result: Any) -> str:
@@ -376,3 +402,17 @@ class ToolsOrchestrator:
             )
         except Exception as err:  # pragma: no cover - defensive guard
             LOGGER.debug("Unable to append tool result to chat log: %s", err)
+
+    @property
+    def web_search_tool_type(self) -> str | None:
+        return self._web_search_tool_type
+
+    @property
+    def web_search_fallback_type(self) -> str | None:
+        return self._web_search_fallback_type
+
+    def update_web_search_tool_type(self, new_type: str | None) -> None:
+        if new_type:
+            self._web_search_tool_type = new_type
+            # Only allow a single fallback step to avoid loops.
+            self._web_search_fallback_type = None

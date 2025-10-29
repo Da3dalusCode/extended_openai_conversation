@@ -68,6 +68,11 @@ AZURE_DOMAIN_PATTERN = r"\.(openai\.azure\.com|azure-api\.net)"
 
 HISTORY_SUMMARY_LIMIT = 10
 
+# REST helper mirrors https://www.home-assistant.io/integrations/rest/ defaults.
+REST_ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH"}
+REST_BODY_MAX_CHARS = 8192
+SCRAPE_SAFE_MAX_INDEX = 50
+
 
 def _lazy_import_bs4():
     try:
@@ -493,6 +498,14 @@ class ScriptFunctionExecutor(FunctionExecutor):
         """initialize script function"""
         super().__init__(SCRIPT_ENTITY_SCHEMA)
 
+    def to_arguments(self, arguments):
+        if "sequence" in arguments:
+            return super().to_arguments(arguments)
+        entity_id = arguments.get("entity_id")
+        if isinstance(entity_id, str) and entity_id.startswith("script."):
+            return {"type": arguments["type"], "entity_id": entity_id}
+        raise InvalidFunction("script")
+
     async def execute(
         self,
         hass: HomeAssistant,
@@ -501,19 +514,39 @@ class ScriptFunctionExecutor(FunctionExecutor):
         user_input: conversation.ConversationInput,
         exposed_entities,
     ):
-        script = Script(
-            hass,
-            function["sequence"],
-            "extended_openai_conversation",
-            DOMAIN,
-            running_description="[extended_openai_conversation] function",
-            logger=_LOGGER,
-        )
+        sequence = function.get("sequence") or arguments.get("sequence")
+        if sequence:
+            if not isinstance(sequence, list):
+                raise HomeAssistantError("Script sequence must be a list of steps.")
+            script = Script(
+                hass,
+                sequence,
+                "extended_openai_conversation",
+                DOMAIN,
+                running_description="[extended_openai_conversation] function",
+                logger=_LOGGER,
+            )
+            result = await script.async_run(
+                run_variables=arguments, context=user_input.context
+            )
+            return result.variables.get("_function_result", "Success")
 
-        result = await script.async_run(
-            run_variables=arguments, context=user_input.context
+        entity_id = arguments.get("entity_id")
+        if isinstance(entity_id, str) and entity_id.startswith("script."):
+            domain, service = entity_id.split(".", 1)
+            # Execute script entity as documented in
+            # https://www.home-assistant.io/integrations/script/.
+            await hass.services.async_call(
+                domain,
+                service,
+                {"entity_id": entity_id},
+                context=user_input.context,
+            )
+            return "Success"
+
+        raise HomeAssistantError(
+            "Script tool requires either a 'sequence' or script 'entity_id'."
         )
-        return result.variables.get("_function_result", "Success")
 
 
 class TemplateFunctionExecutor(FunctionExecutor):
@@ -536,9 +569,19 @@ class TemplateFunctionExecutor(FunctionExecutor):
         user_input: conversation.ConversationInput,
         exposed_entities,
     ):
-        return function["value_template"].async_render(
+        value_template: Template | None = function.get("value_template")
+        if value_template is None:
+            template_str = arguments.get("template")
+            if not isinstance(template_str, str) or not template_str.strip():
+                raise HomeAssistantError("Template tool requires a 'template' string.")
+            value_template = Template(template_str, hass)
+
+        parse_result = function.get("parse_result", arguments.get("parse_json", False))
+        # Template helper mirrors https://www.home-assistant.io/docs/configuration/templating/
+        # behaviour and renders with provided arguments.
+        return value_template.async_render(
             arguments,
-            parse_result=function.get("parse_result", False),
+            parse_result=bool(parse_result),
         )
 
 
@@ -562,7 +605,50 @@ class RestFunctionExecutor(FunctionExecutor):
         user_input: conversation.ConversationInput,
         exposed_entities,
     ):
-        config = function
+        config = dict(function)
+
+        request_url = arguments.get("url") or arguments.get(CONF_RESOURCE)
+        if request_url:
+            if not isinstance(request_url, str) or not request_url.lower().startswith(
+                ("http://", "https://")
+            ):
+                raise HomeAssistantError("REST tool requires an http(s) URL.")
+            config[CONF_RESOURCE] = request_url
+        if CONF_RESOURCE not in config:
+            raise HomeAssistantError("REST tool requires a 'url' argument.")
+
+        method = str(
+            arguments.get("method", config.get(CONF_METHOD, "GET"))
+        ).upper()
+        if method not in REST_ALLOWED_METHODS:
+            raise HomeAssistantError(
+                f"REST method '{method}' is not allowed; "
+                f"allowed methods: {', '.join(sorted(REST_ALLOWED_METHODS))}"
+            )
+        config[CONF_METHOD] = method
+
+        headers = arguments.get("headers")
+        if headers is not None:
+            if not isinstance(headers, dict):
+                raise HomeAssistantError("REST headers must be an object of strings.")
+            safe_headers: dict[str, str] = {}
+            for key, value in headers.items():
+                safe_headers[str(key)[:64]] = str(value)[:256]
+            config[rest.const.CONF_HEADERS] = safe_headers
+
+        if (payload := arguments.get("payload")) is not None:
+            payload_str = str(payload)
+            if len(payload_str) > REST_BODY_MAX_CHARS:
+                raise HomeAssistantError("REST payload exceeds 8KB limit.")
+            config[CONF_PAYLOAD] = payload_str
+
+        config.setdefault(CONF_TIMEOUT, min(15, config.get(CONF_TIMEOUT, 10)))
+        config.setdefault(CONF_VERIFY_SSL, True)
+
+        # REST helper mirrors https://www.home-assistant.io/integrations/rest/
+        # behaviour: build data coordinator and read text/JSON.
+        # Scrape helper aligns with https://www.home-assistant.io/integrations/scrape/
+        # by delegating to the shared REST data coordinator.
         rest_data = _get_rest_data(hass, config, arguments)
 
         await rest_data.async_update()
@@ -598,7 +684,55 @@ class ScrapeFunctionExecutor(FunctionExecutor):
         exposed_entities,
     ):
         _lazy_import_bs4()
-        config = function
+        config = dict(function)
+
+        request_url = arguments.get("url") or arguments.get(CONF_RESOURCE)
+        if request_url:
+            if not isinstance(request_url, str) or not request_url.lower().startswith(
+                ("http://", "https://")
+            ):
+                raise HomeAssistantError("Scrape tool requires an http(s) URL.")
+            config[CONF_RESOURCE] = request_url
+        if CONF_RESOURCE not in config:
+            raise HomeAssistantError("Scrape tool requires a 'url' argument.")
+
+        sensor_configs = [dict(sensor) for sensor in config.get("sensor", [])]
+        def _coerce_index(value: Any) -> int:
+            if value in (None, ""):
+                return 0
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError) as exc:
+                raise HomeAssistantError("Scrape index must be an integer.") from exc
+            return max(0, min(parsed, SCRAPE_SAFE_MAX_INDEX))
+
+        if not sensor_configs:
+            select = arguments.get("select")
+            if not isinstance(select, str) or not select.strip():
+                raise HomeAssistantError("Scrape tool requires a 'select' CSS selector.")
+            sensor_config: dict[str, Any] = {
+                scrape.const.CONF_SELECT: select.strip(),
+                scrape.const.CONF_INDEX: _coerce_index(arguments.get("index")),
+            }
+            if attribute := arguments.get("attribute"):
+                sensor_config[CONF_ATTRIBUTE] = str(attribute)
+            sensor_configs = [sensor_config]
+        else:
+            select = arguments.get("select")
+            index = arguments.get("index")
+            attribute = arguments.get("attribute")
+            target_sensor = sensor_configs[0]
+            if select:
+                target_sensor[scrape.const.CONF_SELECT] = str(select)
+            if index is not None:
+                target_sensor[scrape.const.CONF_INDEX] = _coerce_index(index)
+            if attribute is not None:
+                if attribute == "":
+                    target_sensor.pop(CONF_ATTRIBUTE, None)
+                else:
+                    target_sensor[CONF_ATTRIBUTE] = str(attribute)
+        config["sensor"] = sensor_configs
+
         rest_data = _get_rest_data(hass, config, arguments)
         coordinator = scrape.coordinator.ScrapeCoordinator(
             hass,
@@ -702,7 +836,11 @@ class CompositeFunctionExecutor(FunctionExecutor):
         exposed_entities,
     ):
         config = function
-        sequence = config["sequence"]
+        sequence = config.get("sequence") or arguments.get("sequence")
+        if not isinstance(sequence, list) or not sequence:
+            raise HomeAssistantError(
+                "Composite tool requires a non-empty 'sequence' list."
+            )
 
         for executor_config in sequence:
             function_executor = get_function_executor(executor_config["type"])
