@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Any, Literal, Optional
 
+from homeassistant.components import conversation as conv
 from homeassistant.components.conversation import (
     AssistantContent,
     ChatLog,
@@ -16,14 +17,14 @@ from homeassistant.components.conversation import (
 from homeassistant.helpers import intent
 from homeassistant.const import CONF_API_KEY
 from homeassistant.helpers.llm import ToolInput
+from openai._exceptions import OpenAIError
 
 # Try to import the real ConversationResult; otherwise provide a compatible shim.
 try:
     from homeassistant.components.conversation.agent import ConversationResult  # type: ignore[attr-defined]
 except Exception:
     try:
-        from homeassistant.components.conversation import agent as _agent_mod  # type: ignore[attr-defined]
-        ConversationResult = _agent_mod.ConversationResult  # type: ignore[assignment]
+        ConversationResult = conv.agent.ConversationResult  # type: ignore[assignment]
     except Exception:
 
         class ConversationResult:  # type: ignore[misc]
@@ -85,6 +86,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         self.hass = hass
         self.entry = entry
         self._logged_minimal_effort = False
+        self._preferred_web_search_type: Optional[str] = None
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -105,6 +107,9 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         self, user_input: Any, chat_log: ChatLog
     ) -> ConversationResult:
         """Handle a message from Assist."""
+        # ConversationEntity contract documented in
+        # homeassistant.components.conversation (2024.12): _async_handle_message
+        # receives (ConversationInput, ChatLog) and returns ConversationResult.
         # Lazy import avoids SDK import at module load
         from .openai_support import build_async_client
 
@@ -284,12 +289,39 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 payload["reasoning"] = {"effort": effort}
 
         tools = orchestrator.conversation_tools_for_responses(
-            self.hass, model=model
+            self.hass,
+            model=model,
+            tool_type_override=self._preferred_web_search_type,
         )
         if tools:
             payload["tools"] = tools
 
-        result = await client.responses.create(**payload)
+        # Responses API expects tool continuations via function_call_output entries:
+        # https://platform.openai.com/docs/api-reference/responses/create
+        try:
+            result = await client.responses.create(**payload)
+        except OpenAIError as err:
+            fallback_type = orchestrator.web_search_fallback_type
+            current_type = orchestrator.web_search_tool_type
+            if (
+                current_type
+                and fallback_type
+                and _should_retry_web_search(current_type, str(err))
+            ):
+                # Some tenants still expose 'web_search_preview'; retry gracefully.
+                _LOGGER.debug(
+                    "Web search tool type '%s' rejected; retrying with '%s'.",
+                    current_type,
+                    fallback_type,
+                )
+                payload["tools"] = self._swap_web_search_tool_type(
+                    payload.get("tools", []), current_type, fallback_type
+                )
+                orchestrator.update_web_search_tool_type(fallback_type)
+                self._preferred_web_search_type = fallback_type
+                result = await client.responses.create(**payload)
+            else:
+                raise
         return await self._handle_responses_tool_calls(
             client=client,
             model=model,
@@ -399,9 +431,16 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 )
                 return result
 
+            prev_id = getattr(result, "id", None)
+            call_ids = [output["call_id"] for output in outputs]
+            _LOGGER.debug(
+                "Posting function_call_output for call_id(s) %s with previous_response_id=%s.",
+                call_ids,
+                prev_id,
+            )
             result = await client.responses.create(
                 model=model,
-                previous_response_id=getattr(result, "id", None),
+                previous_response_id=prev_id,
                 input=outputs,
             )
             _LOGGER.debug(
@@ -433,8 +472,9 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
         max_tokens = int(options.get(CONF_MAX_TOKENS) or DEFAULT_MAX_TOKENS)
         if max_tokens > 0:
-            key = "max_completion_tokens" if caps.is_reasoning else "max_tokens"
-            kwargs[key] = max_tokens
+            # OpenAI Chat Completions accepts 'max_tokens' for budget control:
+            # https://platform.openai.com/docs/api-reference/chat/create
+            kwargs["max_tokens"] = max_tokens
 
         if caps.accepts_temperature:
             if (t := options.get(CONF_TEMPERATURE)) is not None:
@@ -626,6 +666,24 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
             AssistantContent(agent_id=agent_id, content=text or "")
         )
 
+    @staticmethod
+    def _swap_web_search_tool_type(
+        tools: list[dict[str, Any]], current_type: str, new_type: str
+    ) -> list[dict[str, Any]]:
+        swapped: list[dict[str, Any]] = []
+        for tool in tools:
+            if tool.get("type") == current_type:
+                updated = dict(tool)
+                updated["type"] = new_type
+                swapped.append(updated)
+            else:
+                swapped.append(tool)
+        _LOGGER.debug(
+            "Registered hosted web search tool using type '%s'.",
+            new_type,
+        )
+        return swapped
+
 
 def _model_supports_minimal_reasoning(model: Optional[str]) -> bool:
     """Return True if the target model advertises 'minimal' reasoning effort.
@@ -637,6 +695,12 @@ def _model_supports_minimal_reasoning(model: Optional[str]) -> bool:
         return False
     name = model.lower()
     return name.startswith("gpt-5")
+
+
+def _should_retry_web_search(current_type: str, error_text: str) -> bool:
+    """Detect tool-type errors so we can retry with the preview variant."""
+    lowered = error_text.lower()
+    return current_type in lowered and "web_search" in lowered
 
 
 def _ok(*, text: str, language: Optional[str], conversation_id: Optional[str], cont: bool) -> ConversationResult:
