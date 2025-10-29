@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 from homeassistant.components.conversation.chat_log import ChatLog, ToolResultContent
-from homeassistant.helpers.exposed_entities import async_should_expose
+from homeassistant.components.homeassistant.exposed_entities import async_should_expose
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
@@ -222,7 +222,7 @@ class ToolsOrchestrator:
         exposed: list[dict[str, Any]] = []
         for state in self.hass.states.async_all():
             # Assist exposure uses the 'conversation' assistant id; see
-            # homeassistant.helpers.exposed_entities.async_should_expose.
+            # homeassistant.components.homeassistant.exposed_entities.async_should_expose.
             if async_should_expose(self.hass, "conversation", state.entity_id):
                 exposed.append(
                     {
