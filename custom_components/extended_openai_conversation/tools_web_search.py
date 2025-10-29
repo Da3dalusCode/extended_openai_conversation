@@ -89,7 +89,7 @@ def build_responses_web_search_tool(
         return None
     if not _model_supports_hosted_search(model):
         LOGGER.debug(
-            "Skipping web search (unsupported) for model '%s'",
+            "Web search disabled for model=%s (unsupported)",
             model or "<unknown>",
         )
         return None
@@ -125,6 +125,6 @@ def configure_chat_completion_web_search(
         return
 
     LOGGER.debug(
-        "Skipping web search (unsupported) for chat completion model '%s'",
+        "Web search disabled for model=%s (unsupported via Chat Completions)",
         model or "<unknown>",
     )
