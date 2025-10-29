@@ -84,6 +84,7 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
     def __init__(self, hass, entry) -> None:
         self.hass = hass
         self.entry = entry
+        self._logged_minimal_effort = False
 
     @property
     def supported_languages(self) -> list[str] | Literal["*"]:
@@ -267,7 +268,20 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
 
         if caps.is_reasoning:
             effort = options.get(CONF_REASONING_EFFORT)
-            payload["reasoning"] = {"effort": effort}
+            if effort:
+                if (
+                    effort == "minimal"
+                    and not _model_supports_minimal_reasoning(model)
+                ):
+                    if not self._logged_minimal_effort:
+                        _LOGGER.debug(
+                            "Reasoning effort 'minimal' not supported for model %s; "
+                            "downgrading to 'low'.",
+                            model or "<unknown>",
+                        )
+                        self._logged_minimal_effort = True
+                    effort = "low"
+                payload["reasoning"] = {"effort": effort}
 
         tools = orchestrator.conversation_tools_for_responses(
             self.hass, model=model
@@ -302,7 +316,18 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         while True:
             calls = extract_function_calls_from_response(result)
             if not calls:
+                _LOGGER.debug(
+                    "Responses loop depth %s: no tool calls returned; exiting.",
+                    depth,
+                )
                 return result
+
+            _LOGGER.debug(
+                "Responses loop depth %s: received %d call(s): %s",
+                depth,
+                len(calls),
+                [self._normalize_tool_call(call)[1] for call in calls],
+            )
 
             outputs: list[dict[str, Any]] = []
             if depth >= orchestrator.max_chain_depth:
@@ -335,6 +360,11 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 call_id = call.get("call_id") or call.get("id") or name
                 if not name:
                     continue
+                _LOGGER.debug(
+                    "Calling tool '%s' via Responses (call_id=%s)",
+                    name,
+                    call_id,
+                )
                 try:
                     output = await orchestrator.execute_tool_call(
                         name=name,
@@ -344,6 +374,11 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                     )
                 except ToolExecutionError as err:
                     output = f"Tool {name} failed: {err}"
+                    _LOGGER.debug(
+                        "Tool '%s' execution returned error via Responses: %s",
+                        name,
+                        err,
+                    )
 
                 outputs.append(
                     {
@@ -352,14 +387,26 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                         "output": output,
                     }
                 )
+                _LOGGER.debug(
+                    "Appending function_call_output for call_id=%s",
+                    call_id or name,
+                )
 
             if not outputs:
+                _LOGGER.debug(
+                    "Responses loop depth %s produced no outputs; returning.",
+                    depth,
+                )
                 return result
 
             result = await client.responses.create(
                 model=model,
                 previous_response_id=getattr(result, "id", None),
                 input=outputs,
+            )
+            _LOGGER.debug(
+                "Submitted %d function_call_output payload(s); continuing Responses loop.",
+                len(outputs),
             )
             depth += 1
 
@@ -407,7 +454,18 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
             tool_calls = getattr(message, "tool_calls", None) or []
 
             if not tool_calls:
+                _LOGGER.debug(
+                    "Chat loop depth %s: no tool calls; returning assistant message.",
+                    depth,
+                )
                 return content
+
+            _LOGGER.debug(
+                "Chat loop depth %s: received %d tool call(s): %s",
+                depth,
+                len(tool_calls),
+                [self._normalize_tool_call(call)[1] for call in tool_calls],
+            )
 
             if depth >= orchestrator.max_chain_depth:
                 suffix = "Tool chain limit reached; unable to continue."
@@ -446,6 +504,11 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                 call_arguments = getattr(func, "arguments", "{}")
                 if not call_name:
                     continue
+                _LOGGER.debug(
+                    "Calling tool '%s' via Chat Completions (call_id=%s)",
+                    call_name,
+                    call_id,
+                )
                 try:
                     output = await orchestrator.execute_tool_call(
                         name=call_name,
@@ -455,6 +518,11 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                     )
                 except ToolExecutionError as err:
                     output = f"Tool {call_name} failed: {err}"
+                    _LOGGER.debug(
+                        "Tool '%s' execution returned error via Chat Completions: %s",
+                        call_name,
+                        err,
+                    )
 
                 messages.append(
                     {
@@ -463,8 +531,16 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
                         "content": output,
                     }
                 )
+                _LOGGER.debug(
+                    "Appended tool result message for call_id=%s",
+                    call_id,
+                )
 
             kwargs["messages"] = messages
+            _LOGGER.debug(
+                "Continuing Chat tool loop with %d accumulated messages.",
+                len(messages),
+            )
             depth += 1
 
     def _log_assistant_tool_calls(
@@ -549,6 +625,18 @@ class ExtendedOpenAIConversationEntity(ConversationEntity):
         chat_log.async_add_assistant_content_without_tools(
             AssistantContent(agent_id=agent_id, content=text or "")
         )
+
+
+def _model_supports_minimal_reasoning(model: Optional[str]) -> bool:
+    """Return True if the target model advertises 'minimal' reasoning effort.
+
+    GPT-5 family models document the 'minimal' effort; other endpoints generally
+    only accept 'low'|'medium'|'high' (see OpenAI Responses API docs).
+    """
+    if not model:
+        return False
+    name = model.lower()
+    return name.startswith("gpt-5")
 
 
 def _ok(*, text: str, language: Optional[str], conversation_id: Optional[str], cont: bool) -> ConversationResult:

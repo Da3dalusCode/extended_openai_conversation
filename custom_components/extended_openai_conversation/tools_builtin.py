@@ -204,8 +204,10 @@ class FunctionExecutor(ABC):
         exposed_entity_ids = {exposed["entity_id"] for exposed in exposed_entities}
         missing = set(entity_ids) - exposed_entity_ids
         if missing:
+            # Exposure follows Assist's 'conversation' assistant toggle (see
+            # homeassistant.helpers.exposed_entities.async_should_expose).
             _LOGGER.debug(
-                "Exposure denied for entities %s; not exposed to agent",
+                "Exposure denied for assistant='conversation', entities=%s",
                 sorted(missing),
             )
             raise EntityNotExposed(sorted(missing))
