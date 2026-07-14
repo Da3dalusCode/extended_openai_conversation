@@ -8,7 +8,10 @@
   "iot_class": "cloud_polling",
   "integration_type": "service",
   "dependencies": ["conversation"],
-  "requirements": ["openai>=1.0.0,<2.0.0"],
+  "requirements": [
+    "openai>=1.0.0,<2.0.0",
+    "beautifulsoup4>=4.12.0"
+  ],
   "version": "1.4.1",
   "loggers": ["custom_components.extended_openai_conversation"],
   "platforms": ["conversation"]
